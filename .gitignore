@@ -1,0 +1,9 @@
+.DS_Store
+.cache/
+.tools/
+build/
+dist/Mac Typer.app/
+mac-typer
+MacTyper.command
+sources/
+AGENTS.md

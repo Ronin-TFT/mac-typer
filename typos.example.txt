@@ -1,0 +1,4 @@
+# 每行一个错词删除规则：先输入左边错词，再删除，再输入右边正词
+teh=>the
+recieve=>receive
+adress=>address
