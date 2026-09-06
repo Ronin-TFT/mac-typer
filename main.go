@@ -67,12 +67,18 @@ type options struct {
 }
 
 func run(opts options) error {
+	if opts.delay < 0 || opts.delay > time.Minute || opts.jitter < 0 || opts.jitter > time.Minute || opts.countdown < 0 || opts.countdown > 3600 {
+		return fmt.Errorf("间隔和抖动须在 0–60 秒之间，倒计时须在 0–3600 秒之间")
+	}
 	input, err := loadInput(opts.text, opts.textFile)
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(input) == "" {
 		return fmt.Errorf("没有可输入内容，请使用 -s 或 -text")
+	}
+	if !utf8.ValidString(input) {
+		return fmt.Errorf("输入文本不是有效 UTF-8")
 	}
 
 	typos, err := loadTypos(opts.typoFile)

@@ -3,9 +3,40 @@ package main
 import (
 	"bytes"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestInvalidInputEmitsNoEvents(t *testing.T) {
+	oldStream, oldWriter := eventStream, eventWriter
+	defer func() { eventStream, eventWriter = oldStream, oldWriter }()
+	eventStream = true
+	var output bytes.Buffer
+	eventWriter = &output
+	for _, opts := range []options{
+		{text: "hello", delay: -1},
+		{text: "hello", jitter: 61 * time.Second},
+		{text: "hello", countdown: -1},
+		{text: "hello", countdown: 3601},
+		{text: "valid prefix\xff"},
+	} {
+		if err := run(opts); err == nil {
+			t.Fatalf("accepted invalid options: %+v", opts)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "invalid.txt")
+	if err := os.WriteFile(path, []byte("hello\xff"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(options{textFile: path}); err == nil {
+		t.Fatal("accepted invalid file")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("typed before validation: %q", output.String())
+	}
+}
 
 type pauseAfterFirstWrite struct {
 	bytes.Buffer

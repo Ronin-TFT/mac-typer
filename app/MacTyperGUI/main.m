@@ -2,6 +2,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <Carbon/Carbon.h>
 #import <signal.h>
+#import <math.h>
 
 @interface AppDelegate : NSObject <NSApplicationDelegate>
 @property NSWindow *window;
@@ -23,6 +24,9 @@
 @property NSTask *task;
 @property BOOL startPending;
 @property BOOL taskPaused;
+@property NSUInteger startGeneration;
+@property NSFileHandle *eventReader;
+@property BOOL acceptingEvents;
 @property NSString *recordingAction;
 @property NSUInteger startHotkeyCode;
 @property NSEventModifierFlags startHotkeyMods;
@@ -65,6 +69,12 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
         self.stopHotkeyMods = [defaults integerForKey:@"stopHotkeyMods"];
     }
     [self buildWindow];
+    for (NSString *key in @[@"delayField", @"jitterField", @"countdownField", @"typoField"]) {
+        NSString *value = [defaults stringForKey:key];
+        if (value) [[self valueForKey:key] setStringValue:value];
+    }
+    [self.delayUnit selectItemWithTitle:[defaults stringForKey:@"delayUnit"] ?: @"ms"];
+    [self.jitterUnit selectItemWithTitle:[defaults stringForKey:@"jitterUnit"] ?: @"ms"];
     if ([defaults stringForKey:@"startHotkeyName"]) self.startHotkeyField.stringValue = [defaults stringForKey:@"startHotkeyName"];
     if ([defaults stringForKey:@"pauseHotkeyName"]) self.pauseHotkeyField.stringValue = [defaults stringForKey:@"pauseHotkeyName"];
     if ([defaults stringForKey:@"stopHotkeyName"]) self.stopHotkeyField.stringValue = [defaults stringForKey:@"stopHotkeyName"];
@@ -73,6 +83,24 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 }
 
 - (BOOL)applicationSupportsSecureRestorableState:(NSApplication *)app { return YES; }
+
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app { return YES; }
+
+- (BOOL)validateSettings {
+    NSArray *fields = @[self.delayField, self.jitterField, self.countdownField, self.hotkeyDelayField];
+    NSArray *limits = @[@([self.delayUnit.titleOfSelectedItem isEqualToString:@"秒"] ? 60 : 60000),
+                        @([self.jitterUnit.titleOfSelectedItem isEqualToString:@"秒"] ? 60 : 60000), @3600, @3600];
+    for (NSUInteger i = 0; i < fields.count; i++) {
+        NSTextField *field = fields[i];
+        NSScanner *scanner = [NSScanner scannerWithString:field.stringValue];
+        double value;
+        if (![scanner scanDouble:&value] || !scanner.isAtEnd || !isfinite(value) || value < 0 || value > [limits[i] doubleValue] || (i == 2 && floor(value) != value)) {
+            [self showError:@"间隔和抖动须为 0–60 秒；倒计时须为 0–3600 的整数；快捷键延迟须为 0–3600 秒。"];
+            return NO;
+        }
+    }
+    return YES;
+}
 
 - (void)buildWindow {
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 760, 620)
@@ -230,18 +258,30 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 }
 
 - (void)saveTypoDoc:(id)sender {
+    NSMutableArray *lines = [NSMutableArray array];
+    NSInteger lineNumber = 0;
+    for (NSString *raw in [self.wordsView.string componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+        lineNumber++;
+        NSString *line = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (!line.length) continue;
+        NSArray *parts = [line componentsSeparatedByString:@"=>"];
+        NSString *correct = parts.count == 2 ? [parts[0] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] : @"";
+        NSString *wrong = parts.count == 2 ? [parts[1] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] : @"";
+        if (parts.count != 2 || !correct.length || !wrong.length) {
+            self.statusField.stringValue = [NSString stringWithFormat:@"第 %ld 行格式错误：请使用 原词=>错词", (long)lineNumber];
+            return;
+        }
+        [lines addObject:[NSString stringWithFormat:@"%@=>%@", wrong, correct]];
+    }
+    if (!lines.count) {
+        self.statusField.stringValue = @"没有可生成的错词规则";
+        return;
+    }
+
     NSSavePanel *panel = [NSSavePanel savePanel];
     panel.nameFieldStringValue = @"typos.txt";
     if ([panel runModal] != NSModalResponseOK) return;
 
-    NSMutableArray *lines = [NSMutableArray array];
-    for (NSString *raw in [self.wordsView.string componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-        NSString *line = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        if (!line.length) continue;
-        NSArray *parts = [line componentsSeparatedByString:@"=>"];
-        if (parts.count != 2) continue;
-        [lines addObject:[NSString stringWithFormat:@"%@=>%@", parts[1], parts[0]]];
-    }
     NSString *out = [lines componentsJoinedByString:@"\n"];
     NSError *error = nil;
     if (![out writeToURL:panel.URL atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
@@ -257,6 +297,10 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 }
 
 - (void)startTyping:(id)sender {
+    if (self.task) return;
+    self.startPending = NO;
+    self.startGeneration++;
+    if (![self validateSettings]) return;
     [self saveSettings];
     self.startPending = NO;
     self.taskPaused = NO;
@@ -285,6 +329,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     NSPipe *eventsPipe = [NSPipe pipe];
     self.task.standardOutput = eventsPipe;
     NSFileHandle *eventReader = eventsPipe.fileHandleForReading;
+    self.eventReader = eventReader;
     __block NSMutableData *eventBuffer = [NSMutableData data];
     __weak AppDelegate *weakSelf = self;
     eventReader.readabilityHandler = ^(NSFileHandle *handle) {
@@ -318,6 +363,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 
     NSError *error = nil;
     self.startButton.enabled = NO;
+    @synchronized (self) { self.acceptingEvents = YES; }
     self.statusField.stringValue = @"倒计时开始后，请把光标放到目标输入框";
     if (![self.task launchAndReturnError:&error]) {
         self.startButton.enabled = YES;
@@ -349,6 +395,8 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 }
 
 - (void)stopTyping:(id)sender {
+    @synchronized (self) { self.acceptingEvents = NO; }
+    self.startGeneration++;
     BOOL wasPending = self.startPending;
     self.startPending = NO;
     self.taskPaused = NO;
@@ -357,6 +405,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
         return;
     }
     [self.task terminate];
+    self.eventReader.readabilityHandler = nil;
     self.statusField.stringValue = @"正在结束";
 }
 
@@ -367,6 +416,8 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 }
 
 - (void)handleEventLine:(NSString *)line {
+    @synchronized (self) {
+    if (!self.acceptingEvents) return;
     if ([line hasPrefix:@"T"]) {
         NSData *data = [[NSData alloc] initWithBase64EncodedString:[line substringFromIndex:1] options:0];
         NSString *text = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
@@ -374,6 +425,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     } else if ([line hasPrefix:@"B"]) {
         NSInteger count = [[line substringFromIndex:1] integerValue];
         if (count > 0 && count < 10000) [self postBackspaces:count];
+    }
     }
 }
 
@@ -408,21 +460,24 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 }
 
 - (void)recordStartHotkey:(id)sender {
+    if (self.task || self.startPending) return;
     [self unregisterHotkeys];
     self.recordingAction = @"start";
-    self.startHotkeyField.stringValue = @"按下快捷键";
+    self.statusField.stringValue = @"请按下新的开始快捷键";
 }
 
 - (void)recordPauseHotkey:(id)sender {
+    if (self.task || self.startPending) return;
     [self unregisterHotkeys];
     self.recordingAction = @"pause";
-    self.pauseHotkeyField.stringValue = @"按下快捷键";
+    self.statusField.stringValue = @"请按下新的暂停快捷键";
 }
 
 - (void)recordStopHotkey:(id)sender {
+    if (self.task || self.startPending) return;
     [self unregisterHotkeys];
     self.recordingAction = @"stop";
-    self.stopHotkeyField.stringValue = @"按下快捷键";
+    self.statusField.stringValue = @"请按下新的结束快捷键";
 }
 
 - (void)installHotkeyMonitor {
@@ -441,28 +496,63 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 
 - (BOOL)recordHotkeyEvent:(NSEvent *)event {
     if (!self.recordingAction) return NO;
+    if (event.keyCode == 53) {
+        self.recordingAction = nil;
+        [self registerHotkeys];
+        self.statusField.stringValue = @"已取消快捷键录制";
+        return YES;
+    }
     NSEventModifierFlags mods = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
     if (!(mods & (NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl))) {
         self.statusField.stringValue = @"快捷键至少要包含 Command、Option 或 Control";
         return YES;
     }
 
+    NSString *action = self.recordingAction;
     NSString *name = [self hotkeyName:event];
-    if ([self.recordingAction isEqualToString:@"start"]) {
+    NSUInteger oldCode;
+    NSEventModifierFlags oldMods;
+    NSString *oldName;
+    if ([action isEqualToString:@"start"]) {
+        oldCode = self.startHotkeyCode;
+        oldMods = self.startHotkeyMods;
+        oldName = self.startHotkeyField.stringValue;
         self.startHotkeyCode = event.keyCode;
         self.startHotkeyMods = mods;
         self.startHotkeyField.stringValue = name;
-    } else if ([self.recordingAction isEqualToString:@"pause"]) {
+    } else if ([action isEqualToString:@"pause"]) {
+        oldCode = self.pauseHotkeyCode;
+        oldMods = self.pauseHotkeyMods;
+        oldName = self.pauseHotkeyField.stringValue;
         self.pauseHotkeyCode = event.keyCode;
         self.pauseHotkeyMods = mods;
         self.pauseHotkeyField.stringValue = name;
     } else {
+        oldCode = self.stopHotkeyCode;
+        oldMods = self.stopHotkeyMods;
+        oldName = self.stopHotkeyField.stringValue;
         self.stopHotkeyCode = event.keyCode;
         self.stopHotkeyMods = mods;
         self.stopHotkeyField.stringValue = name;
     }
     self.recordingAction = nil;
-    [self registerHotkeys];
+    if (![self registerHotkeys]) {
+        if ([action isEqualToString:@"start"]) {
+            self.startHotkeyCode = oldCode;
+            self.startHotkeyMods = oldMods;
+            self.startHotkeyField.stringValue = oldName;
+        } else if ([action isEqualToString:@"pause"]) {
+            self.pauseHotkeyCode = oldCode;
+            self.pauseHotkeyMods = oldMods;
+            self.pauseHotkeyField.stringValue = oldName;
+        } else {
+            self.stopHotkeyCode = oldCode;
+            self.stopHotkeyMods = oldMods;
+            self.stopHotkeyField.stringValue = oldName;
+        }
+        [self registerHotkeys];
+        self.statusField.stringValue = @"快捷键不可用，已恢复原设置";
+    }
     return YES;
 }
 
@@ -482,7 +572,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     self.startHotkey = self.pauseHotkey = self.stopHotkey = NULL;
 }
 
-- (void)registerHotkeys {
+- (BOOL)registerHotkeys {
     [self unregisterHotkeys];
     EventHotKeyID startID = {'MTYP', 1};
     EventHotKeyID pauseID = {'MTYP', 2};
@@ -493,14 +583,21 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     if (startStatus || pauseStatus || stopStatus) {
         [self unregisterHotkeys];
         self.statusField.stringValue = @"快捷键注册失败：快捷键可能已被系统或其他软件占用";
+        return NO;
     } else {
         self.statusField.stringValue = @"快捷键已更新，后台可用";
         [self saveSettings];
+        return YES;
     }
 }
 
 - (void)saveSettings {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    for (NSString *key in @[@"delayField", @"jitterField", @"countdownField", @"typoField"]) {
+        [defaults setObject:[[self valueForKey:key] stringValue] forKey:key];
+    }
+    [defaults setObject:self.delayUnit.titleOfSelectedItem forKey:@"delayUnit"];
+    [defaults setObject:self.jitterUnit.titleOfSelectedItem forKey:@"jitterUnit"];
     [defaults setInteger:self.startHotkeyCode forKey:@"startHotkeyCode"];
     [defaults setInteger:self.startHotkeyMods forKey:@"startHotkeyMods"];
     [defaults setInteger:self.pauseHotkeyCode forKey:@"pauseHotkeyCode"];
@@ -516,12 +613,13 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 - (void)handleRegisteredHotkey:(NSNumber *)hotkeyID {
     switch (hotkeyID.unsignedIntValue) {
     case 1: {
-        if (self.startPending || (self.task && self.task.isRunning)) return;
+        if (self.startPending || self.task || ![self validateSettings]) return;
+        NSUInteger generation = ++self.startGeneration;
         self.startPending = YES;
         self.statusField.stringValue = @"快捷键已触发，等待启动";
         double delay = self.hotkeyDelayField.doubleValue;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (!self.startPending) return;
+            if (!self.startPending || generation != self.startGeneration) return;
             [self startTyping:nil];
         });
         break;
@@ -548,6 +646,13 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    @synchronized (self) { self.acceptingEvents = NO; }
+    self.startPending = NO;
+    self.eventReader.readabilityHandler = nil;
+    if (self.task.isRunning) {
+        [self.task terminate];
+        [self.task waitUntilExit];
+    }
     [self saveSettings];
     [self unregisterHotkeys];
     if (self.hotkeyHandler) RemoveEventHandler(self.hotkeyHandler);
@@ -560,6 +665,24 @@ int main(int argc, const char * argv[]) {
         NSApplication *app = [NSApplication sharedApplication];
         AppDelegate *delegate = [AppDelegate new];
         app.delegate = delegate;
+
+        NSMenu *menuBar = [NSMenu new];
+        NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"Mac Typer" action:nil keyEquivalent:@""];
+        NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Mac Typer"];
+        [appMenu addItemWithTitle:@"退出 Mac Typer" action:@selector(terminate:) keyEquivalent:@"q"];
+        appMenuItem.submenu = appMenu;
+        [menuBar addItem:appMenuItem];
+        NSMenuItem *editItem = [[NSMenuItem alloc] initWithTitle:@"编辑" action:nil keyEquivalent:@""];
+        NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"编辑"];
+        [editMenu addItemWithTitle:@"撤销" action:@selector(undo:) keyEquivalent:@"z"];
+        [editMenu addItemWithTitle:@"剪切" action:@selector(cut:) keyEquivalent:@"x"];
+        [editMenu addItemWithTitle:@"复制" action:@selector(copy:) keyEquivalent:@"c"];
+        [editMenu addItemWithTitle:@"粘贴" action:@selector(paste:) keyEquivalent:@"v"];
+        [editMenu addItemWithTitle:@"全选" action:@selector(selectAll:) keyEquivalent:@"a"];
+        editItem.submenu = editMenu;
+        [menuBar addItem:editItem];
+        app.mainMenu = menuBar;
+
         [app run];
     }
     return 0;

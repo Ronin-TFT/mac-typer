@@ -7,6 +7,9 @@ DMG="$ROOT/dist/MacTyper.dmg"
 STAGING="$ROOT/build/dmg"
 GOCACHE="${GOCACHE:-$ROOT/.cache/go-build}"
 GO="${GO:-$(command -v go || true)}"
+if [[ -z "$GO" && -x "$ROOT/.tools/go/bin/go" ]]; then
+  GO="$ROOT/.tools/go/bin/go"
+fi
 
 if [[ -z "$GO" || ! -x "$GO" ]]; then
   echo "Go is required to build Mac Typer" >&2
@@ -33,7 +36,7 @@ for size in 16 32 128 256 512; do
   sips -z "$size" "$size" "$ROOT/build/icon.png" --out "$ROOT/build/AppIcon.iconset/icon_${size}x${size}.png" >/dev/null
   sips -z "$((size * 2))" "$((size * 2))" "$ROOT/build/icon.png" --out "$ROOT/build/AppIcon.iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
-cp "$ROOT/build/icon.png" "$APP/Contents/Resources/AppIcon.png"
+iconutil -c icns "$ROOT/build/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 
 codesign --force --deep --sign - "$APP"
 mkdir -p "$STAGING"
