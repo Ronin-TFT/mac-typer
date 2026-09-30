@@ -189,13 +189,18 @@ func loadTypos(path string) ([]typo, error) {
 
 	var out []typo
 	scanner := bufio.NewScanner(f)
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
+		if !utf8.ValidString(line) {
+			return nil, fmt.Errorf("错词库第 %d 行不是有效 UTF-8", lineNumber)
+		}
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		parts := strings.SplitN(line, "=>", 2)
+		parts := strings.Split(line, "=>")
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("错词库格式错误：%q，应该是 错词=>正词", line)
 		}

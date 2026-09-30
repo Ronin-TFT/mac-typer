@@ -15,7 +15,13 @@ macOS 图形化模拟键入工具。核心使用 Go，界面使用原生 AppKit�
 - 关闭主窗口会退出应用并终止键入任务
 - 标准编辑菜单支持全选、剪切、复制和粘贴
 
-## 1.0.1 修复与验证
+## 1.0.2 修复与验证
+
+- 暂停采用系统进程暂停/恢复，避免刚启动时暂停信号结束程序；暂停时结束或退出会先恢复再终止任务。
+- 数值统一转换后传给 Go，避免科学记数法等格式在界面通过却执行失败。
+- 拒绝非 UTF-8、空词和多个分隔符的错词规则，保证校验完成后才输入。
+- 命令行模式检查键盘发送权限并保护事件创建失败路径。
+- 启动失败会清理事件读取器；安装包使用固定 Bundle ID 指定要求签名。
 
 修复取消后旧延时回调误启动、重复启动状态、停止后缓冲事件继续发送，
 并在开始前验证时间范围及完整 UTF-8 文本。间隔和抖动限 0–60 秒，
@@ -23,16 +29,21 @@ macOS 图形化模拟键入工具。核心使用 Go，界面使用原生 AppKit�
 
 已通过 Go 单元测试、竞态检查、静态检查、AppKit 编译检查，
 并验证 App 签章、正式 ICNS 图标及 DMG 校验和。界面已验证无效数值提示与关闭窗口退出。
-重建版尚需用户为最终 App 授予辅助功能权限；真实目标输入、背景快捷键及运行中退出清理仍待端到端验收。
+原生回归测试验证了暂停、继续、取消及暂停状态下结束和退出的子进程清理。
+真实目标输入及后台快捷键仍需在目标机器上验收；自动化测试不代表所有输入框兼容。
 当前发布包为 Apple Silicon，使用临时签名，未进行 Developer ID 公证。
 
 ## 安装
 
-下载 [`dist/MacTyper.dmg`](dist/MacTyper.dmg)，打开后把 **Mac Typer** 拖入“应用程序”。首次运行在：
+从 [最新 Release](https://github.com/Ronin-TFT/mac-typer/releases/latest) 下载 `MacTyper.dmg`，打开后把 **Mac Typer** 拖入“应用程序”。
+要求 Apple Silicon (M1/M2/M3/M4 等) 和 macOS 13+，当前不提供 Intel 版本。
+更新时完整替换原应用，避免旧文件残留导致签名失效。首次运行在：
 
 `系统设置 -> 隐私与安全性 -> 辅助功能`
 
 只为 **Mac Typer** 打开权限，不需要为终端重复授权。
+若旧版权限开关已经开启但应用仍提示未放行，移除旧记录，重新添加“应用程序”中的当前版本并重启。
+当前签名没有 Developer ID 和公证；macOS 可能拦截首次打开，需要用户在“隐私与安全性”中自行确认。
 
 默认快捷键：
 
@@ -56,7 +67,10 @@ adress=>address
 需要 macOS 13+、Go 和 Xcode Command Line Tools。
 
 ```sh
-go test ./...
+go test -race ./...
+go vet ./...
+clang -fobjc-arc tests/gui_test.m -framework Cocoa -framework ApplicationServices -framework Carbon -o /tmp/mactyper-gui-test
+/tmp/mactyper-gui-test
 ./build_dmg.sh
 ```
 

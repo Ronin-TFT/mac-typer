@@ -38,7 +38,10 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ROOT/build/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 
-codesign --force --deep --sign - "$APP"
+codesign --force --deep --sign - \
+  --identifier local.ronin.mactyper \
+  --requirements '=designated => identifier "local.ronin.mactyper"' \
+  "$APP"
 mkdir -p "$STAGING"
 ditto "$APP" "$STAGING/Mac Typer.app"
 ln -s /Applications "$STAGING/Applications"

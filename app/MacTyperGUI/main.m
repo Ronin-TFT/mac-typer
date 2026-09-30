@@ -293,7 +293,8 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 }
 
 - (NSString *)durationArg:(NSTextField *)field unit:(NSPopUpButton *)unit {
-    return [field.stringValue stringByAppendingString:[unit.titleOfSelectedItem isEqualToString:@"秒"] ? @"s" : @"ms"];
+    double seconds = field.doubleValue * ([unit.titleOfSelectedItem isEqualToString:@"秒"] ? 1 : 0.001);
+    return [NSString stringWithFormat:@"%lldns", (long long)llround(seconds * 1000000000)];
 }
 
 - (void)startTyping:(id)sender {
@@ -320,7 +321,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     NSURL *tool = [[NSBundle mainBundle] URLForResource:@"mac-typer" withExtension:nil];
     self.task = [[NSTask alloc] init];
     self.task.executableURL = tool;
-    NSMutableArray *args = [NSMutableArray arrayWithObjects:@"-event-stream", @"-s", text, @"-delay", [self durationArg:self.delayField unit:self.delayUnit], @"-jitter", [self durationArg:self.jitterField unit:self.jitterUnit], @"-countdown", self.countdownField.stringValue, nil];
+    NSMutableArray *args = [NSMutableArray arrayWithObjects:@"-event-stream", @"-s", text, @"-delay", [self durationArg:self.delayField unit:self.delayUnit], @"-jitter", [self durationArg:self.jitterField unit:self.jitterUnit], @"-countdown", [NSString stringWithFormat:@"%ld", (long)self.countdownField.doubleValue], nil];
     if (self.typoField.stringValue.length > 0) [args addObjectsFromArray:@[@"-typos", self.typoField.stringValue]];
     self.task.arguments = args;
 
@@ -366,6 +367,10 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     @synchronized (self) { self.acceptingEvents = YES; }
     self.statusField.stringValue = @"倒计时开始后，请把光标放到目标输入框";
     if (![self.task launchAndReturnError:&error]) {
+        @synchronized (self) { self.acceptingEvents = NO; }
+        eventReader.readabilityHandler = nil;
+        [eventReader closeFile];
+        self.eventReader = nil;
         self.startButton.enabled = YES;
         self.statusField.stringValue = error.localizedDescription;
         [self showError:error.localizedDescription];
@@ -386,7 +391,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
         self.statusField.stringValue = self.startPending ? @"任务仍在等待启动，暂时不能暂停" : @"没有正在执行的任务";
         return;
     }
-    if (kill(self.task.processIdentifier, SIGUSR1) != 0) {
+    if (kill(self.task.processIdentifier, self.taskPaused ? SIGCONT : SIGSTOP) != 0) {
         self.statusField.stringValue = @"暂停失败：任务已经结束";
         return;
     }
@@ -404,6 +409,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
         self.statusField.stringValue = wasPending ? @"已取消启动" : @"没有正在执行的任务";
         return;
     }
+    kill(self.task.processIdentifier, SIGCONT);
     [self.task terminate];
     self.eventReader.readabilityHandler = nil;
     self.statusField.stringValue = @"正在结束";
@@ -650,6 +656,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     self.startPending = NO;
     self.eventReader.readabilityHandler = nil;
     if (self.task.isRunning) {
+        kill(self.task.processIdentifier, SIGCONT);
         [self.task terminate];
         [self.task waitUntilExit];
     }
