@@ -62,6 +62,26 @@ func TestNextTypo(t *testing.T) {
 	}
 }
 
+func TestInvalidTypoLibraryEmitsNoEvents(t *testing.T) {
+	oldStream, oldWriter := eventStream, eventWriter
+	defer func() { eventStream, eventWriter = oldStream, oldWriter }()
+	eventStream = true
+	var output bytes.Buffer
+	eventWriter = &output
+	path := filepath.Join(t.TempDir(), "typos.txt")
+	for _, contents := range []string{"mot\xff=>mother", "motter=>mother=>other", "=>mother", "motter=>"} {
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := run(options{text: "mother", typoFile: path}); err == nil {
+			t.Fatalf("accepted invalid typo library: %q", contents)
+		}
+	}
+	if output.Len() != 0 {
+		t.Fatalf("typed before validating typo library: %q", output.String())
+	}
+}
+
 func TestCommonPrefixRunes(t *testing.T) {
 	if got := commonPrefixRunes("motter", "mother"); got != 3 {
 		t.Fatalf("commonPrefixRunes() = %d, want 3", got)

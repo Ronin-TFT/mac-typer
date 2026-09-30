@@ -3,6 +3,7 @@
 #import "../app/MacTyperGUI/main.m"
 #undef main
 #include <assert.h>
+#include <sys/wait.h>
 
 @interface TestDelegate : AppDelegate
 @property NSUInteger posted;
@@ -32,9 +33,39 @@ int main(void) {
         delegate.task.executableURL = [NSURL fileURLWithPath:@"/bin/sleep"];
         delegate.task.arguments = @[@"30"];
         assert([delegate.task launchAndReturnError:NULL]);
+        [delegate togglePause:nil];
+        int processStatus;
+        assert(waitpid(delegate.task.processIdentifier, &processStatus, WUNTRACED) > 0);
+        assert(WIFSTOPPED(processStatus));
+        assert(delegate.taskPaused && delegate.task.isRunning);
+        [delegate togglePause:nil];
+        assert(!delegate.taskPaused && delegate.task.isRunning);
+        [delegate togglePause:nil];
+        assert(waitpid(delegate.task.processIdentifier, &processStatus, WUNTRACED) > 0);
         [delegate applicationWillTerminate:nil];
         assert(!delegate.task.isRunning);
-        puts("GUI event suppression, cancellation and child cleanup passed");
+
+        delegate.task = [NSTask new];
+        delegate.task.executableURL = [NSURL fileURLWithPath:@"/bin/sleep"];
+        delegate.task.arguments = @[@"30"];
+        delegate.taskPaused = NO;
+        assert([delegate.task launchAndReturnError:NULL]);
+        [delegate togglePause:nil];
+        assert(waitpid(delegate.task.processIdentifier, &processStatus, WUNTRACED) > 0);
+        [delegate stopTyping:nil];
+        [delegate.task waitUntilExit];
+        assert(!delegate.task.isRunning);
+
+        [NSApplication sharedApplication];
+        NSTextField *field = [NSTextField new];
+        NSPopUpButton *unit = [NSPopUpButton new];
+        [unit addItemsWithTitles:@[@"ms", @"秒"]];
+        field.stringValue = @" 1e2 ";
+        assert([[delegate durationArg:field unit:unit] isEqualToString:@"100000000ns"]);
+        [unit selectItemWithTitle:@"秒"];
+        field.stringValue = @"0.25";
+        assert([[delegate durationArg:field unit:unit] isEqualToString:@"250000000ns"]);
+        puts("GUI cancellation, pause/resume, paused child cleanup and numeric arguments passed");
     }
     return 0;
 }

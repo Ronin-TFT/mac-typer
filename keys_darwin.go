@@ -6,6 +6,7 @@ package main
 #include <stdlib.h>
 
 static int postText(const char *s) {
+	if (!CGPreflightPostEventAccess()) return 0;
 	CFStringRef str = CFStringCreateWithCString(NULL, s, kCFStringEncodingUTF8);
 	if (!str) return 0;
 	CFIndex len = CFStringGetLength(str);
@@ -17,6 +18,13 @@ static int postText(const char *s) {
 	CFStringGetCharacters(str, CFRangeMake(0, len), chars);
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, 0, true);
 	CGEventRef up = CGEventCreateKeyboardEvent(NULL, 0, false);
+	if (!down || !up) {
+		if (down) CFRelease(down);
+		if (up) CFRelease(up);
+		free(chars);
+		CFRelease(str);
+		return 0;
+	}
 	CGEventKeyboardSetUnicodeString(down, len, chars);
 	CGEventKeyboardSetUnicodeString(up, len, chars);
 	CGEventPost(kCGHIDEventTap, down);
@@ -28,13 +36,20 @@ static int postText(const char *s) {
 	return 1;
 }
 
-static void postBackspace(void) {
+static int postBackspace(void) {
+	if (!CGPreflightPostEventAccess()) return 0;
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, 51, true);
 	CGEventRef up = CGEventCreateKeyboardEvent(NULL, 51, false);
+	if (!down || !up) {
+		if (down) CFRelease(down);
+		if (up) CFRelease(up);
+		return 0;
+	}
 	CGEventPost(kCGHIDEventTap, down);
 	CGEventPost(kCGHIDEventTap, up);
 	CFRelease(down);
 	CFRelease(up);
+	return 1;
 }
 */
 import "C"
@@ -68,7 +83,9 @@ func sendBackspace(n int) error {
 		return err
 	}
 	for i := 0; i < n; i++ {
-		C.postBackspace()
+		if C.postBackspace() == 0 {
+			return fmt.Errorf("系统删除失败：无法创建键盘事件")
+		}
 	}
 	return nil
 }
