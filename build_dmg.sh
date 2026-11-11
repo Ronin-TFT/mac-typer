@@ -17,21 +17,33 @@ if [[ -z "$GO" || ! -x "$GO" ]]; then
   exit 1
 fi
 
-rm -rf "$APP" "$DMG" "$STAGING" "$ROOT/build/AppIcon.iconset" "$ROOT/build/icon.png"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$ROOT/build"
+export MACOSX_DEPLOYMENT_TARGET=13.0
+rm -rf "$APP" "$DMG" "$STAGING" "$ROOT/build/AppIcon.iconset" "$ROOT/build/icon.png" "$ROOT/build/lib"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$ROOT/build/lib"
 
-GOCACHE="$GOCACHE" "$GO" build -o "$APP/Contents/Resources/mac-typer" "$ROOT"
-GOCACHE="$GOCACHE" "$GO" run "$ROOT/app/make_icon.go"
+# 打字引擎：分别为 Apple Silicon 和 Intel 编译静态库，再合并为通用库。
+for goarch clangarch in arm64 arm64 amd64 x86_64; do
+  CGO_ENABLED=1 GOOS=darwin GOARCH=$goarch GOCACHE="$GOCACHE" \
+    CC="clang -arch $clangarch -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
+    "$GO" build -buildmode=c-archive -trimpath -o "$ROOT/build/lib/$goarch/libmactyper.a" "$ROOT"
+done
+lipo -create "$ROOT/build/lib/arm64/libmactyper.a" "$ROOT/build/lib/amd64/libmactyper.a" \
+  -output "$ROOT/build/lib/libmactyper.a"
+cp "$ROOT/build/lib/arm64/libmactyper.h" "$ROOT/build/lib/libmactyper.h"
 
-clang "$ROOT/app/MacTyperGUI/main.m" \
+clang -arch arm64 -arch x86_64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -fobjc-arc -O2 \
+  -I "$ROOT/build/lib" -I "$ROOT" \
+  "$ROOT"/app/MacTyperGUI/*.m "$ROOT/build/lib/libmactyper.a" \
   -o "$APP/Contents/MacOS/MacTyper" \
   -framework Cocoa \
   -framework ApplicationServices \
   -framework Carbon \
-  -fobjc-arc
+  -framework CoreFoundation
+lipo -info "$APP/Contents/MacOS/MacTyper"
 
 cp "$ROOT/app/MacTyperGUI/Info.plist" "$APP/Contents/Info.plist"
 
+GOCACHE="$GOCACHE" "$GO" run "$ROOT/app/make_icon.go"
 mkdir -p "$ROOT/build/AppIcon.iconset"
 for size in 16 32 128 256 512; do
   sips -z "$size" "$size" "$ROOT/build/icon.png" --out "$ROOT/build/AppIcon.iconset/icon_${size}x${size}.png" >/dev/null
@@ -40,7 +52,7 @@ done
 iconutil -c icns "$ROOT/build/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 
 # 签名：设置 SIGN_IDENTITY 时使用该证书（推荐自签名“代码签名”证书，见 README）。
-# 不再使用仅检查 identifier 的签名要求，否则任何同 identifier 的临时签名程序
+# 不使用仅检查 identifier 的签名要求，否则任何同 identifier 的临时签名程序
 # 都能冒用 Mac Typer 的辅助功能权限。
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 if [[ -n "$SIGN_IDENTITY" ]]; then
@@ -53,14 +65,10 @@ else
   echo "警告：未设置 SIGN_IDENTITY，使用临时签名。每次更新后需要重新授予辅助功能权限。" >&2
 fi
 
-codesign --force --sign "$SIGN_IDENTITY" \
-  --identifier local.ronin.mactyper.helper \
-  "$APP/Contents/Resources/mac-typer"
-codesign --force --sign "$SIGN_IDENTITY" \
-  --identifier local.ronin.mactyper \
-  "$APP"
+codesign --force --sign "$SIGN_IDENTITY" --identifier local.ronin.mactyper "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 codesign -d -r- "$APP" 2>&1 | grep designated >&2
+
 mkdir -p "$STAGING"
 ditto "$APP" "$STAGING/Mac Typer.app"
 ln -s /Applications "$STAGING/Applications"

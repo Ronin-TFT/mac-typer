@@ -1,55 +1,36 @@
 # Mac Typer
 
-macOS 图形化模拟键入工具。核心使用 Go，界面使用原生 AppKit。
+macOS 图形化模拟键入工具。打字引擎使用 Go（编译为静态库链接进 App），界面使用原生 AppKit。
 
 ## 功能
 
 - 基础输入间隔和随机抖动，支持 `ms` / `秒` 切换
-- 导入错词库，随机删除整个错词或仅删除错误部分后重输
-- 错词删除同样应用间隔和随机抖动
-- 全局开始、暂停/继续、结束快捷键，可在设置中录制
-- 快捷键启动延迟、辅助功能权限检测和内置教程
-- 暂停发生在错词删除中途时，继续后从原位置完成删除
-- 记住间隔、抖动、单位、倒计时和错词库路径
-- 按 Esc 取消快捷键录制；执行期间不能录制，以保留停止快捷键
-- 关闭主窗口会退出应用并终止键入任务
-- 标准编辑菜单支持全选、剪切、复制和粘贴
+- **自然节奏**：标点和换行后停顿更久、词内连击更快、偶尔犹豫
+- **错词库**：按“错词概率”打错整词，再删除整个错词或只删错误部分后重输
+- **手误**：按“手误概率”误按相邻键（有时多打一个字母才发现），随后删除并改正
+- 输入框可直接拖入文本文件，或用“导入文本…”（⌘O）；支持 UTF-8、UTF-16、GB18030
+- 进度条与“已输入 x/y · 约剩 m:ss”提示，倒计时显示在状态栏
+- 全局开始、暂停/继续、结束快捷键，可在设置中录制；快捷键启动会等待松开修饰键
+- **菜单栏模式**：关闭窗口后保留在菜单栏，快捷键和菜单继续可用（可在设置中关闭）
+- 记住全部参数、窗口位置和快捷键
 
-## 1.0.3 优化
+## 1.1.0 更新
 
-- 发送按键时使用独立事件源并清空修饰键；快捷键启动会等待松开修饰键，避免首字被当成 ⌘A 等快捷键覆盖文档。
-- 换行和 Tab 改用真实的回车/Tab 键发送，兼容终端、Electron 等按键码处理输入的应用；`\r\n` 统一为 `\n`。
-- 正文改为通过标准输入传给子进程，不再出现在进程列表中，也不受命令行长度限制（命令行可用 `-stdin`）。
-- 暂停时界面不再发送已缓冲的事件，间隔为 0 时暂停同样立即生效。
-- 错词匹配遵守词边界并优先最长规则：`the` 不再命中 `other`、`there`；中日文不受空格分词限制。
-- 新增“错词概率 %”（命令行 `-typo-rate 0–1`），按概率决定每处是否打错；错词库拒绝错词与正词相同的规则，工具保留 `#` 注释。
-- 界面显示倒计时，开始输入后显示“正在输入…”。
-- 错词规则按首字符建立索引，长文本加大词库时匹配更快。
-- 构建脚本可从任意目录运行；DMG 不再提交到仓库，只发布在 Release；新增 macOS CI。
-- 修复签名安全问题：不再使用仅检查 identifier 的签名要求，改为用自签名证书签名，防止其他程序冒用辅助功能权限。**从 1.0.2 升级需要在“辅助功能”中移除旧的 Mac Typer 记录并重新授权一次**，之后用同一证书签名的版本无需再授权。
+- 合并为单进程：打字引擎直接在 App 内运行，暂停和结束立即生效，最后一个字发完才显示“完成”。
+- 新增自然节奏、手误、进度与剩余时间、文本文件导入、菜单栏模式。
+- 通用版安装包，同时支持 Apple Silicon 和 Intel。
+- 界面改用自动布局，窗口可调整大小；关闭输入框的智能引号和自动替换，保证输入内容与原文一致。
+- 发送按键时清空修饰键，换行和 Tab 使用真实按键；错词匹配遵守词边界并支持错词概率。
+- 签名改为自签名证书，防止其他程序冒用辅助功能权限。
+  **从 1.0.x 升级需要在“辅助功能”中移除旧的 Mac Typer 记录并重新授权一次**，之后用同一证书签名的版本无需再授权。
+- 界面代码按模块拆分；新增 Linux 与 macOS 自动测试。
 
-## 1.0.2 修复与验证
-
-- 暂停采用系统进程暂停/恢复，避免刚启动时暂停信号结束程序；暂停时结束或退出会先恢复再终止任务。
-- 数值统一转换后传给 Go，避免科学记数法等格式在界面通过却执行失败。
-- 拒绝非 UTF-8、空词和多个分隔符的错词规则，保证校验完成后才输入。
-- 命令行模式检查键盘发送权限并保护事件创建失败路径。
-- 启动失败会清理事件读取器；安装包使用固定 Bundle ID 指定要求签名。
-
-修复取消后旧延时回调误启动、重复启动状态、停止后缓冲事件继续发送，
-并在开始前验证时间范围及完整 UTF-8 文本。间隔和抖动限 0–60 秒，
-倒计时限 0–3600 整数秒，快捷键延迟限 0–3600 秒。
-
-已通过 Go 单元测试、竞态检查、静态检查、AppKit 编译检查，
-并验证 App 签章、正式 ICNS 图标及 DMG 校验和。界面已验证无效数值提示与关闭窗口退出。
-原生回归测试验证了暂停、继续、取消及暂停状态下结束和退出的子进程清理。
 真实目标输入及后台快捷键仍需在目标机器上验收；自动化测试不代表所有输入框兼容。
-当前发布包为 Apple Silicon，使用临时签名，未进行 Developer ID 公证。
 
 ## 安装
 
 从 [最新 Release](https://github.com/Ronin-TFT/mac-typer/releases/latest) 下载 `MacTyper.dmg`，打开后把 **Mac Typer** 拖入“应用程序”。
-要求 Apple Silicon (M1/M2/M3/M4 等) 和 macOS 13+，当前不提供 Intel 版本。
+支持 Apple Silicon 和 Intel Mac（通用版），要求 macOS 13+。
 更新时完整替换原应用，避免旧文件残留导致签名失效。首次运行在：
 
 `系统设置 -> 隐私与安全性 -> 辅助功能`
@@ -73,7 +54,20 @@ teh=>the
 adress=>address
 ```
 
-图形界面的“错词库工具”也接受 `正确词=>错词`，保存时会自动转换。
+`#` 开头的行是注释。图形界面的“错词库工具”使用 `正确词=>错词`，保存时会自动转换。
+规则只在完整单词上触发（`the` 不会命中 `other`），多条规则时优先最长的一条；
+中文、日文没有空格分词，不受这个限制。
+
+## 命令行
+
+同一份 Go 代码也可以编译成命令行工具：
+
+```sh
+go build -o mac-typer .
+./mac-typer -text article.txt -delay 80ms -jitter 60ms -natural -slip-rate 0.02 -typos typos.example.txt
+```
+
+`kill -USR1 <pid>` 可暂停/继续。运行 `./mac-typer -h` 查看全部参数。
 
 ## 构建与测试
 
@@ -82,12 +76,27 @@ adress=>address
 ```sh
 go test -race ./...
 go vet ./...
-clang -fobjc-arc tests/gui_test.m -framework Cocoa -framework ApplicationServices -framework Carbon -o /tmp/mactyper-gui-test
-/tmp/mactyper-gui-test
+go build -buildmode=c-archive -o build/libmactyper.a .
+clang -fobjc-arc -I build -I . -I app/MacTyperGUI tests/gui_test.m app/MacTyperGUI/MT*.m build/libmactyper.a \
+  -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -o build/gui-test
+build/gui-test
 SIGN_IDENTITY="Mac Typer Signing" ./build_dmg.sh
 ```
 
-输出文件：`dist/MacTyper.dmg`
+输出文件：`dist/MacTyper.dmg`。Go 引擎和 C 接口测试（`tests/bridge_test.c`）在 Linux 上也能运行。
+
+### 代码结构
+
+| 文件 | 作用 |
+|---|---|
+| `engine.go` | 打字引擎：节奏、错词、手误、暂停/结束、进度 |
+| `bridge.go`、`engine_bridge.h` | 导出给界面的 C 接口 |
+| `keys_darwin.go` | 发送系统键盘事件 |
+| `main.go` | 命令行入口、输入与错词库读取 |
+| `app/MacTyperGUI/MTAppDelegate.m` | 窗口、设置、执行流程、菜单栏 |
+| `app/MacTyperGUI/MTEngine.m` | 引擎的 Objective-C 封装 |
+| `app/MacTyperGUI/MTHotkeys.m` | 全局快捷键 |
+| `app/MacTyperGUI/MTDropTextView.m`、`MTUtil.m` | 文本拖入导入、数值校验、进度文字 |
 
 ### 签名证书（不做公证）
 

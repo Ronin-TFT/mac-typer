@@ -5,22 +5,43 @@ on:
   pull_request:
 
 jobs:
-  test:
+  engine:
+    name: Go engine (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: C bridge test
+        run: |
+          go build -buildmode=c-archive -o build/libmactyper.a .
+          cc -Wall -Werror -I build -I . tests/bridge_test.c build/libmactyper.a -lpthread -o build/bridge-test
+          build/bridge-test
+
+  macos:
+    name: App (macOS)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-      - name: Go vet
-        run: go vet ./...
-      - name: Go tests
-        run: go test -race ./...
-      - name: Build helper
-        run: go build -o /tmp/mac-typer .
-      - name: Build GUI
-        run: clang -fobjc-arc -Wall app/MacTyperGUI/main.m -framework Cocoa -framework ApplicationServices -framework Carbon -o /tmp/MacTyper
-      - name: GUI regression tests
+      - run: go test -race ./...
+      - name: Build engine library
+        run: go build -buildmode=c-archive -o build/libmactyper.a .
+      - name: Build app
         run: |
-          clang -fobjc-arc tests/gui_test.m -framework Cocoa -framework ApplicationServices -framework Carbon -o /tmp/mactyper-gui-test
-          /tmp/mactyper-gui-test
+          clang -fobjc-arc -Wall -I build -I . app/MacTyperGUI/*.m build/libmactyper.a \
+            -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -o build/MacTyper
+      - name: GUI and bridge tests
+        run: |
+          clang -fobjc-arc -Wall -I build -I . -I app/MacTyperGUI tests/gui_test.m app/MacTyperGUI/MT*.m build/libmactyper.a \
+            -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -o build/gui-test
+          build/gui-test
+          clang -Wall -I build -I . tests/bridge_test.c build/libmactyper.a \
+            -framework CoreFoundation -framework ApplicationServices -o build/bridge-test
+          build/bridge-test
