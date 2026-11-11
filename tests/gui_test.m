@@ -11,6 +11,7 @@
 #import "MTEngine.h"
 #import "MTHotkeys.h"
 #import "MTInputSource.h"
+#import "MTUpdateChecker.h"
 #import "MTUtil.h"
 
 @interface EngineObserver : NSObject <MTEngineDelegate>
@@ -61,6 +62,11 @@ int main(void) {
         assert([MTDurationText(65) isEqualToString:@"1:05"]);
         assert([MTProgressText(0, 10, 0) isEqualToString:@"已输入 0/10"]);
         assert([MTProgressText(5, 10, 5) isEqualToString:@"已输入 5/10 · 约剩 0:05"]);
+
+        // 版本比较（不访问网络）
+        assert(MTCompareVersions(@"v1.10.0", @"1.9.2") == NSOrderedDescending);
+        assert(MTCompareVersions(@"1.1", @"v1.1.0") == NSOrderedSame);
+        assert(MTCompareVersions(@"1.0.2", @"1.1.0") == NSOrderedAscending);
 
         // 文本文件导入：UTF-8 BOM、UTF-16、GB18030、二进制
         NSMutableData *utf8 = [NSMutableData dataWithBytes:"\xEF\xBB\xBF" length:3];

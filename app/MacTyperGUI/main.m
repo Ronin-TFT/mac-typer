@@ -7,6 +7,7 @@ static NSMenu *MTBuildMainMenu(void) {
     NSMenuItem *appItem = [[NSMenuItem alloc] initWithTitle:@"Mac Typer" action:nil keyEquivalent:@""];
     NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Mac Typer"];
     [appMenu addItemWithTitle:@"显示主窗口" action:@selector(showMainWindow:) keyEquivalent:@"0"];
+    [appMenu addItemWithTitle:@"检查更新…" action:@selector(checkForUpdates:) keyEquivalent:@""];
     [appMenu addItem:NSMenuItem.separatorItem];
     [appMenu addItemWithTitle:@"隐藏 Mac Typer" action:@selector(hide:) keyEquivalent:@"h"];
     [appMenu addItemWithTitle:@"退出 Mac Typer" action:@selector(terminate:) keyEquivalent:@"q"];

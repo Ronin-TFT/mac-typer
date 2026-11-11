@@ -15,12 +15,13 @@ macOS 图形化模拟键入工具。打字引擎使用 Go（编译为静态库�
 - 全局开始、暂停/继续、结束快捷键，可在设置中录制，三者不能重复；快捷键启动会等待松开修饰键
 - **菜单栏模式**：关闭窗口后保留在菜单栏，快捷键和菜单继续可用（可在设置中关闭）
 - 记住全部参数、窗口位置和快捷键
+- 启动时检查 GitHub 上的新版本（每天最多一次，可关闭），也可在菜单“检查更新…”手动检查；只提示和打开下载页，不自动安装
 
 ## 1.1.0 更新
 
 - 合并为单进程：打字引擎直接在 App 内运行，暂停和结束立即生效，最后一个字发完才显示“完成”。
 - 新增自然节奏、手误、进度与剩余时间、文本文件导入、菜单栏模式。
-- 自动切换英文输入法；错词匹配不区分大小写；录制快捷键时检查冲突。
+- 自动切换英文输入法；错词匹配不区分大小写；录制快捷键时检查冲突；检查新版本。
 - 通用版安装包，同时支持 Apple Silicon 和 Intel。
 - 界面改用自动布局，窗口可调整大小；关闭输入框的智能引号和自动替换，保证输入内容与原文一致。
 - 发送按键时清空修饰键，换行和 Tab 使用真实按键；错词匹配遵守词边界并支持错词概率。
@@ -87,7 +88,7 @@ build/gui-test
 SIGN_IDENTITY="Mac Typer Signing" ./build_dmg.sh
 ```
 
-输出文件：`dist/MacTyper.dmg`。Go 引擎和 C 接口测试（`tests/bridge_test.c`）在 Linux 上也能运行。
+输出文件：`dist/MacTyper.dmg`。发布时 Release 标签使用 `v<版本号>`（如 `v1.1.0`），与 `Info.plist` 中的版本一致，检查更新才能正确比较。Go 引擎和 C 接口测试（`tests/bridge_test.c`）在 Linux 上也能运行。
 
 真实键入的端到端测试（需给“终端”开辅助功能权限，运行时不要操作键盘鼠标）：
 
@@ -109,6 +110,7 @@ GitHub Actions 每次推送自动跑 Linux 测试；macOS 测试需在 Actions �
 | `app/MacTyperGUI/MTEngine.m` | 引擎的 Objective-C 封装 |
 | `app/MacTyperGUI/MTHotkeys.m` | 全局快捷键 |
 | `app/MacTyperGUI/MTInputSource.m` | 输入法切换与恢复 |
+| `app/MacTyperGUI/MTUpdateChecker.m` | 检查 GitHub 最新版本 |
 | `app/MacTyperGUI/MTDropTextView.m`、`MTUtil.m` | 文本拖入导入、数值校验、进度文字 |
 
 ### 签名证书（不做公证）

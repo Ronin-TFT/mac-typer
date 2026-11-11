@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (IBAction)togglePause:(nullable id)sender;
 - (IBAction)stopTyping:(nullable id)sender;
 - (IBAction)importText:(nullable id)sender;
+- (IBAction)checkForUpdates:(nullable id)sender;
 @end
 
 NS_ASSUME_NONNULL_END

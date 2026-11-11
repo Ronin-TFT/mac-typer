@@ -4,6 +4,7 @@
 #import "MTDropTextView.h"
 #import "MTHotkeys.h"
 #import "MTInputSource.h"
+#import "MTUpdateChecker.h"
 #import "MTUtil.h"
 
 static NSString *const MTSecondsUnit = @"秒";
@@ -73,6 +74,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
 @property (nonatomic, strong) NSArray<NSTextField *> *hotkeyFields;
 @property (nonatomic, strong) NSTextField *hotkeyDelayField;
 @property (nonatomic, strong) NSButton *keepInMenuBarCheckbox;
+@property (nonatomic, strong) NSButton *autoUpdateCheckbox;
 @property (nonatomic, strong) NSTextField *statusField;
 @property (nonatomic, strong) NSProgressIndicator *progressBar;
 @property (nonatomic, strong) NSButton *startButton;
@@ -128,6 +130,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     if (!CGPreflightPostEventAccess()) {
         self.statusField.stringValue = @"尚未获得辅助功能权限：请到“设置”页点“测试辅助功能权限”";
     }
+    [self checkForUpdatesAutomatically];
 }
 
 - (BOOL)applicationSupportsSecureRestorableState:(NSApplication *)app { return YES; }
@@ -349,6 +352,9 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     self.switchInputSourceCheckbox = [NSButton checkboxWithTitle:@"开始输入时自动切换到英文输入法，结束后恢复（避免中文输入法拦截按键）"
                                                           target:nil action:nil];
     self.switchInputSourceCheckbox.state = NSControlStateValueOn;
+    self.autoUpdateCheckbox = [NSButton checkboxWithTitle:@"启动时检查新版本（每天最多一次，只访问 GitHub）" target:nil action:nil];
+    self.autoUpdateCheckbox.state = NSControlStateValueOn;
+    NSButton *checkNow = [NSButton buttonWithTitle:@"立即检查更新" target:self action:@selector(checkForUpdates:)];
     NSTextField *tutorial = [NSTextField wrappingLabelWithString:
         @"教程：系统设置 > 隐私与安全性 > 辅助功能，打开 Mac Typer。快捷键在后台也能使用；按 Esc 取消录制，执行期间不能录制。"];
 
@@ -357,6 +363,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
         MTLabel(@"快捷键启动延迟（秒）", 14, YES), self.hotkeyDelayField,
         self.keepInMenuBarCheckbox,
         self.switchInputSourceCheckbox,
+        MTRow(@[self.autoUpdateCheckbox, checkNow], 12),
         [NSButton buttonWithTitle:@"测试辅助功能权限" target:self action:@selector(testPermission:)],
         tutorial,
     ], 10);
@@ -468,6 +475,9 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     [self.jitterUnit selectItemWithTitle:[defaults stringForKey:@"jitterUnit"] ?: @"ms"];
     self.naturalCheckbox.state = [defaults boolForKey:@"natural"] ? NSControlStateValueOn : NSControlStateValueOff;
     if ([defaults objectForKey:@"keepInMenuBar"]) self.keepInMenuBar = [defaults boolForKey:@"keepInMenuBar"];
+    if ([defaults objectForKey:@"autoUpdateCheck"]) {
+        self.autoUpdateCheckbox.state = [defaults boolForKey:@"autoUpdateCheck"] ? NSControlStateValueOn : NSControlStateValueOff;
+    }
     if ([defaults objectForKey:@"switchInputSource"]) {
         self.switchInputSourceCheckbox.state = [defaults boolForKey:@"switchInputSource"] ? NSControlStateValueOn : NSControlStateValueOff;
     }
@@ -485,6 +495,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     [defaults setBool:self.naturalCheckbox.state == NSControlStateValueOn forKey:@"natural"];
     [defaults setBool:self.keepInMenuBar forKey:@"keepInMenuBar"];
     [defaults setBool:self.switchInputSourceCheckbox.state == NSControlStateValueOn forKey:@"switchInputSource"];
+    [defaults setBool:self.autoUpdateCheckbox.state == NSControlStateValueOn forKey:@"autoUpdateCheck"];
     NSArray<NSString *> *prefixes = @[@"start", @"pause", @"stop"];
     for (NSUInteger i = 0; i < self.hotkeys.count; i++) {
         MTHotkey *hotkey = self.hotkeys[i];
@@ -584,6 +595,54 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
         }
         self.typoField.stringValue = panel.URL.path ?: @"";
         self.statusField.stringValue = @"错词库已生成";
+    }];
+}
+
+#pragma mark - 更新
+
+- (NSString *)currentVersion {
+    return [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"0";
+}
+
+- (void)checkForUpdatesAutomatically {
+    if (self.autoUpdateCheckbox.state != NSControlStateValueOn) return;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSDate *last = [defaults objectForKey:@"lastUpdateCheck"];
+    if ([last isKindOfClass:NSDate.class] && -last.timeIntervalSinceNow < 24 * 3600) return;
+    [defaults setObject:[NSDate date] forKey:@"lastUpdateCheck"];
+    [self checkForUpdatesInteractive:NO];
+}
+
+- (void)checkForUpdates:(id)sender {
+    [self checkForUpdatesInteractive:YES];
+}
+
+// interactive 为 NO 时只在有新版本时提示，网络失败静默忽略。
+- (void)checkForUpdatesInteractive:(BOOL)interactive {
+    if (interactive) self.statusField.stringValue = @"正在检查更新…";
+    NSString *current = [self currentVersion];
+    [MTUpdateChecker fetchLatestWithCompletion:^(NSString *latest, NSURL *url, NSError *error) {
+        if (error || !latest) {
+            if (interactive) self.statusField.stringValue = [@"检查更新失败：" stringByAppendingString:error.localizedDescription ?: @"未知错误"];
+            return;
+        }
+        if (MTCompareVersions(latest, current) != NSOrderedDescending) {
+            if (interactive) self.statusField.stringValue = [NSString stringWithFormat:@"已是最新版本（%@）", current];
+            return;
+        }
+        if (self.engine.running) {
+            self.statusField.stringValue = [NSString stringWithFormat:@"有新版本 %@，结束后可在设置页下载", latest];
+            return;
+        }
+        if (!self.window.isVisible) [self showMainWindow:nil];
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = [NSString stringWithFormat:@"发现新版本 %@", latest];
+        alert.informativeText = [NSString stringWithFormat:@"当前版本 %@。下载后完整替换“应用程序”中的 Mac Typer。", current];
+        [alert addButtonWithTitle:@"前往下载"];
+        [alert addButtonWithTitle:@"以后再说"];
+        [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+            if (response == NSAlertFirstButtonReturn && url) [NSWorkspace.sharedWorkspace openURL:url];
+        }];
     }];
 }
 
