@@ -38,7 +38,11 @@ clang -arch arm64 -arch x86_64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -f
   -framework Cocoa \
   -framework ApplicationServices \
   -framework Carbon \
-  -framework CoreFoundation
+  -framework CoreFoundation \
+  -framework ScreenCaptureKit \
+  -framework AVFoundation \
+  -framework CoreMedia \
+  -framework CoreVideo
 lipo -info "$APP/Contents/MacOS/MacTyper"
 
 cp "$ROOT/app/MacTyperGUI/Info.plist" "$APP/Contents/Info.plist"

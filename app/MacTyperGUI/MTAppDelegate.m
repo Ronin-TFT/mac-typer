@@ -5,55 +5,11 @@
 #import "MTHotkeys.h"
 #import "MTInputSource.h"
 #import "MTUpdateChecker.h"
+#import "MTRecordingController.h"
 #import "MTUtil.h"
+#import "MTLayout.h"
 
 static NSString *const MTSecondsUnit = @"秒";
-
-#pragma mark - 布局辅助
-
-static NSTextField *MTLabel(NSString *text, CGFloat size, BOOL bold) {
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = bold ? [NSFont boldSystemFontOfSize:size] : [NSFont systemFontOfSize:size];
-    return label;
-}
-
-static NSTextField *MTField(NSString *text, CGFloat width) {
-    NSTextField *field = [NSTextField textFieldWithString:text];
-    [field.widthAnchor constraintEqualToConstant:width].active = YES;
-    return field;
-}
-
-static NSStackView *MTRow(NSArray<NSView *> *views, CGFloat spacing) {
-    NSStackView *stack = [NSStackView stackViewWithViews:views];
-    stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    stack.alignment = NSLayoutAttributeCenterY;
-    stack.spacing = spacing;
-    return stack;
-}
-
-static NSStackView *MTColumn(NSArray<NSView *> *views, CGFloat spacing) {
-    NSStackView *stack = [NSStackView stackViewWithViews:views];
-    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    stack.alignment = NSLayoutAttributeLeading;
-    stack.distribution = NSStackViewDistributionFill;
-    stack.spacing = spacing;
-    return stack;
-}
-
-static void MTFillWidth(NSStackView *stack, NSArray<NSView *> *views) {
-    for (NSView *view in views) [view.widthAnchor constraintEqualToAnchor:stack.widthAnchor].active = YES;
-}
-
-static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
-    child.translatesAutoresizingMaskIntoConstraints = NO;
-    [parent addSubview:child];
-    [NSLayoutConstraint activateConstraints:@[
-        [child.topAnchor constraintEqualToAnchor:parent.topAnchor constant:inset],
-        [child.leadingAnchor constraintEqualToAnchor:parent.leadingAnchor constant:inset],
-        [child.trailingAnchor constraintEqualToAnchor:parent.trailingAnchor constant:-inset],
-        [child.bottomAnchor constraintEqualToAnchor:parent.bottomAnchor constant:-inset],
-    ]];
-}
 
 @interface MTAppDelegate ()
 @property (nonatomic, strong) NSWindow *window;
@@ -81,6 +37,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
 @property (nonatomic, strong) NSButton *pauseButton;
 @property (nonatomic, strong) NSButton *stopButton;
 @property (nonatomic, strong) NSStatusItem *statusItem;
+@property (nonatomic, strong) MTRecordingController *recordingController;
 
 @property (nonatomic, strong) MTHotkeyCenter *hotkeyCenter;
 @property (nonatomic, strong) NSMutableArray<MTHotkey *> *hotkeys;
@@ -144,12 +101,22 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     return YES;
 }
 
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)app {
+    if (!self.recordingController.recording) return NSTerminateNow;
+    // 先把录屏写完再退出，避免文件损坏。
+    [self.recordingController stopForTerminationWithCompletion:^{
+        [NSApp replyToApplicationShouldTerminate:YES];
+    }];
+    return NSTerminateLater;
+}
+
 - (void)applicationWillTerminate:(NSNotification *)notification {
     self.startPending = NO;
     self.startGeneration++;
     [self.engine stop];
     [self restoreInputSource];
     [self saveSettings];
+    [self.recordingController saveSettings];
     [self.hotkeyCenter uninstall];
     if (self.localKeyMonitor) [NSEvent removeMonitor:self.localKeyMonitor];
 }
@@ -185,8 +152,14 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     subtitle.textColor = NSColor.secondaryLabelColor;
     NSStackView *header = MTColumn(@[MTLabel(@"Mac Typer", 24, YES), subtitle], 2);
 
+    self.recordingController = [MTRecordingController new];
+    self.recordingController.mainWindow = self.window;
+    __weak MTAppDelegate *weakSelf = self;
+    self.recordingController.statusHandler = ^(NSString *message) { weakSelf.statusField.stringValue = message; };
+
     self.tabs = [NSTabView new];
     [self.tabs addTabViewItem:[self mainTab]];
+    [self.tabs addTabViewItem:self.recordingController.tabItem];
     [self.tabs addTabViewItem:[self typoToolTab]];
     [self.tabs addTabViewItem:[self settingsTab]];
 
@@ -401,6 +374,8 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     [menu addItemWithTitle:@"暂停" action:@selector(togglePause:) keyEquivalent:@""].target = self;
     [menu addItemWithTitle:@"结束" action:@selector(stopTyping:) keyEquivalent:@""].target = self;
     [menu addItem:NSMenuItem.separatorItem];
+    [menu addItemWithTitle:@"开始录屏" action:@selector(toggleRecording:) keyEquivalent:@""].target = self.recordingController;
+    [menu addItem:NSMenuItem.separatorItem];
     [menu addItemWithTitle:@"退出 Mac Typer" action:@selector(terminate:) keyEquivalent:@""].target = NSApp;
     self.statusItem.menu = menu;
     self.statusItem.visible = self.keepInMenuBar;
@@ -455,7 +430,8 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     config->typo_rate = typoRate / 100.0;
     config->slip_rate = slipRate / 100.0;
     config->natural = self.naturalCheckbox.state == NSControlStateValueOn;
-    config->wait_ready = self.switchInputSourceCheckbox.state == NSControlStateValueOn;
+    config->wait_ready = self.switchInputSourceCheckbox.state == NSControlStateValueOn ||
+                         self.recordingController.autoRecordWithTyping;
     return YES;
 }
 
@@ -740,9 +716,12 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
 
 - (void)engineIsReady {
     // 在倒计时结束、目标输入框已获得焦点时切换，兼容“自动切换到文稿的输入法”。
-    if (!self.savedInputSource) self.savedInputSource = [MTInputSource switchToASCIICapable];
-    if (self.savedInputSource) self.statusField.stringValue = @"已临时切换到英文输入法";
-    [self.engine continueAfterReady];
+    if (self.switchInputSourceCheckbox.state == NSControlStateValueOn && !self.savedInputSource) {
+        self.savedInputSource = [MTInputSource switchToASCIICapable];
+        if (self.savedInputSource) self.statusField.stringValue = @"已临时切换到英文输入法";
+    }
+    __weak MTAppDelegate *weakSelf = self;
+    [self.recordingController typingWillStart:^{ [weakSelf.engine continueAfterReady]; }];
 }
 
 - (void)restoreInputSource {
@@ -766,6 +745,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
 
 - (void)engineDidFinish:(MTFinishReason)reason message:(NSString *)message {
     [self restoreInputSource];
+    [self.recordingController typingDidEnd];
     switch (reason) {
     case MTFinishReasonDone:
         self.progressBar.doubleValue = self.progressBar.maxValue;

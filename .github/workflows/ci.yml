@@ -39,11 +39,11 @@ jobs:
       - name: Build app
         run: |
           clang -fobjc-arc -Wall -I build -I . app/MacTyperGUI/*.m build/libmactyper.a \
-            -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -o build/MacTyper
+            -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia -framework CoreVideo -o build/MacTyper
       - name: GUI and bridge tests
         run: |
           clang -fobjc-arc -Wall -I build -I . -I app/MacTyperGUI tests/gui_test.m app/MacTyperGUI/MT*.m build/libmactyper.a \
-            -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -o build/gui-test
+            -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia -framework CoreVideo -o build/gui-test
           build/gui-test
           clang -Wall -I build -I . tests/bridge_test.c build/libmactyper.a \
             -framework CoreFoundation -framework ApplicationServices -o build/bridge-test

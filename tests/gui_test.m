@@ -2,7 +2,8 @@
 // 构建：
 //   go build -buildmode=c-archive -o build/libmactyper.a .
 //   clang -fobjc-arc -I build -I . -I app/MacTyperGUI tests/gui_test.m app/MacTyperGUI/MT*.m build/libmactyper.a \
-//     -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -o build/gui-test
+//     -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation \
+//     -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia -framework CoreVideo -o build/gui-test
 //   build/gui-test
 #import <Cocoa/Cocoa.h>
 #include <assert.h>
@@ -12,6 +13,8 @@
 #import "MTHotkeys.h"
 #import "MTInputSource.h"
 #import "MTUpdateChecker.h"
+#import "MTScreenRecorder.h"
+#import "MTRecordingController.h"
 #import "MTUtil.h"
 
 @interface EngineObserver : NSObject <MTEngineDelegate>
@@ -62,6 +65,27 @@ int main(void) {
         assert([MTDurationText(65) isEqualToString:@"1:05"]);
         assert([MTProgressText(0, 10, 0) isEqualToString:@"已输入 0/10"]);
         assert([MTProgressText(5, 10, 5) isEqualToString:@"已输入 5/10 · 约剩 0:05"]);
+
+        // 录屏：坐标转换、编码尺寸、文件名、空闲时停止（不实际录制）
+        CGRect screenFrame = CGRectMake(0, 0, 1440, 900);
+        CGRect local = MTDisplayLocalRect(CGRectMake(100, 600, 400, 200), screenFrame);
+        assert(CGRectEqualToRect(local, CGRectMake(100, 100, 400, 200)));
+        CGRect second = MTDisplayLocalRect(CGRectMake(1500, 50, 300, 300), CGRectMake(1440, 0, 1920, 1080));
+        assert(CGRectEqualToRect(second, CGRectMake(60, 730, 300, 300)));
+        assert(CGRectIsNull(MTDisplayLocalRect(CGRectMake(2000, 2000, 10, 10), screenFrame)));
+        assert(CGSizeEqualToSize(MTEncodedSize(CGSizeMake(1281, 721)), CGSizeMake(1280, 720)));
+        CGSize fitted = MTEncodedSize(CGSizeMake(5120, 2880));
+        assert(fitted.width <= 4096 && fitted.height <= 2304 && (long)fitted.width % 2 == 0 && (long)fitted.height % 2 == 0);
+        NSDate *fixed = [NSDate dateWithTimeIntervalSince1970:0];
+        assert([MTRecordingFileName(fixed) hasPrefix:@"Mac Typer 录屏 "] && [MTRecordingFileName(fixed) hasSuffix:@".mp4"]);
+        __block BOOL stopCalled = NO;
+        [[MTScreenRecorder new] stopWithCompletion:^(NSURL *url, NSError *error) { stopCalled = (url == nil && error != nil); }];
+        assert(stopCalled);
+        MTRecordingController *recordingController = [MTRecordingController new];
+        assert(recordingController.tabItem.view && !recordingController.recording);
+        __block BOOL readyCalled = NO;
+        [recordingController typingWillStart:^{ readyCalled = YES; }];
+        assert(readyCalled || recordingController.autoRecordWithTyping);
 
         // 版本比较（不访问网络）
         assert(MTCompareVersions(@"v1.10.0", @"1.9.2") == NSOrderedDescending);
@@ -164,7 +188,7 @@ int main(void) {
         delegate.keepInMenuBar = YES;
         assert(![delegate applicationShouldTerminateAfterLastWindowClosed:NSApp]);
 
-        puts("GUI utilities, text import, hotkeys, input source, engine bridge, ready gate and menu bar mode passed");
+        puts("GUI recording helpers, utilities, text import, hotkeys, input source, engine bridge, ready gate and menu bar mode passed");
     }
     return 0;
 }

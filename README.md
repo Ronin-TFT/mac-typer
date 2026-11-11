@@ -14,8 +14,15 @@ macOS 图形化模拟键入工具。打字引擎使用 Go（编译为静态库�
 - 进度条与“已输入 x/y · 约剩 m:ss”提示，倒计时显示在状态栏
 - 全局开始、暂停/继续、结束快捷键，可在设置中录制，三者不能重复；快捷键启动会等待松开修饰键
 - **菜单栏模式**：关闭窗口后保留在菜单栏，快捷键和菜单继续可用（可在设置中关闭）
+- **内置录屏**：录制整个屏幕或拖拽框选的自定义区域，可选 30/60 帧和是否录鼠标指针，保存为 MP4；
+  可设置“键入时自动录屏”，开始输入时自动开始、完成后自动停止。录像里不会出现 Mac Typer 自己的窗口
 - 记住全部参数、窗口位置和快捷键
 - 启动时检查 GitHub 上的新版本（每天最多一次，可关闭），也可在菜单“检查更新…”手动检查；只提示和打开下载页，不自动安装
+
+## 1.2.0 更新
+
+- 新增“录屏”页：整个屏幕或自定义区域录制、帧率、鼠标指针、保存位置、随键入自动录屏；菜单栏可开始/停止录屏。
+- 首次录屏需要在 系统设置 > 隐私与安全性 > 屏幕与系统录音 中允许 Mac Typer（临时签名每次重新打包后需重新允许）。
 
 ## 1.1.0 更新
 
@@ -87,7 +94,8 @@ go test -race ./...
 go vet ./...
 go build -buildmode=c-archive -o build/libmactyper.a .
 clang -fobjc-arc -I build -I . -I app/MacTyperGUI tests/gui_test.m app/MacTyperGUI/MT*.m build/libmactyper.a \
-  -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation -o build/gui-test
+  -framework Cocoa -framework ApplicationServices -framework Carbon -framework CoreFoundation \
+  -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia -framework CoreVideo -o build/gui-test
 build/gui-test
 SIGN_IDENTITY="Mac Typer Signing" ./build_dmg.sh
 ```
@@ -115,6 +123,10 @@ GitHub Actions 每次推送自动跑 Linux 测试；macOS 测试需在 Actions �
 | `app/MacTyperGUI/MTHotkeys.m` | 全局快捷键 |
 | `app/MacTyperGUI/MTInputSource.m` | 输入法切换与恢复 |
 | `app/MacTyperGUI/MTUpdateChecker.m` | 检查 GitHub 最新版本 |
+| `app/MacTyperGUI/MTScreenRecorder.m` | 屏幕录制（ScreenCaptureKit + H.264 MP4） |
+| `app/MacTyperGUI/MTRegionSelector.m` | 拖拽框选录制区域、录制时的区域边框 |
+| `app/MacTyperGUI/MTRecordingController.m` | “录屏”页与随键入录屏 |
+| `app/MacTyperGUI/MTLayout.h` | 自动布局辅助函数 |
 | `app/MacTyperGUI/MTDropTextView.m`、`MTUtil.m` | 文本拖入导入、数值校验、进度文字 |
 
 ### 签名证书（不做公证）
