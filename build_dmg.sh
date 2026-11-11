@@ -42,6 +42,7 @@ clang -arch arm64 -arch x86_64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -f
 lipo -info "$APP/Contents/MacOS/MacTyper"
 
 cp "$ROOT/app/MacTyperGUI/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/typos/common.txt" "$APP/Contents/Resources/typos_common.txt"
 
 GOCACHE="$GOCACHE" "$GO" run "$ROOT/app/make_icon.go"
 mkdir -p "$ROOT/build/AppIcon.iconset"

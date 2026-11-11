@@ -201,6 +201,34 @@ func TestGateStartWaitsForReady(t *testing.T) {
 	}
 }
 
+func TestBuiltinTypoLibrary(t *testing.T) {
+	typos, err := loadTypos("typos/common.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(typos) < 200 {
+		t.Fatalf("built-in library has only %d rules", len(typos))
+	}
+	seen := map[string]bool{}
+	for _, ty := range typos {
+		key := strings.ToLower(ty.correct)
+		if seen[key] {
+			t.Errorf("duplicate correct word %q", ty.correct)
+		}
+		seen[key] = true
+	}
+	input := "Because the government did not receive the address, it was definitely a surprise. 我们再接再厉，按部就班地部署。"
+	for seed := int64(0); seed < 20; seed++ {
+		s := runJob(t, config{typoRate: 1}, typos, input, seed)
+		if s.result() != input {
+			t.Fatalf("seed %d: %q", seed, s.result())
+		}
+		if seed == 0 && s.count("⌫") == 0 {
+			t.Fatal("built-in library produced no typos")
+		}
+	}
+}
+
 func TestCommonPrefixRunes(t *testing.T) {
 	if got := commonPrefixRunes("motter", "mother"); got != 3 {
 		t.Fatalf("commonPrefixRunes() = %d, want 3", got)

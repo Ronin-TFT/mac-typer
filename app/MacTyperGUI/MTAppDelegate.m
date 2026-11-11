@@ -277,6 +277,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     self.typoField.placeholderString = @"错词库路径，可留空";
     [self.typoField setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
     NSStackView *typoRow = MTRow(@[self.typoField,
+                                   [NSButton buttonWithTitle:@"内置常用词库" target:self action:@selector(useBuiltinTypos:)],
                                    [NSButton buttonWithTitle:@"选择错词库…" target:self action:@selector(chooseTypoFile:)]], 8);
 
     self.delayField = MTField(@"80", 72);
@@ -527,6 +528,23 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
         if (response == NSModalResponseOK) self.typoField.stringValue = panel.URL.path ?: @"";
     }];
+}
+
+- (void)useBuiltinTypos:(id)sender {
+    NSString *path = [NSBundle.mainBundle pathForResource:@"typos_common" ofType:@"txt"];
+    if (!path) {
+        self.statusField.stringValue = @"找不到内置错词库，请重新安装 Mac Typer";
+        return;
+    }
+    self.typoField.stringValue = path;
+    NSString *note = @"";
+    // 内置词库覆盖 the、and 等高频词，100% 会让几乎每句话都打错。
+    if ([self.typoRateField.stringValue isEqualToString:@"100"]) {
+        self.typoRateField.stringValue = @"20";
+        note = @"，错词概率已调为 20%";
+    }
+    [self saveSettings];
+    self.statusField.stringValue = [NSString stringWithFormat:@"已使用内置常用错词库（英文拼写 + 中文错别字）%@", note];
 }
 
 - (void)importText:(id)sender {
