@@ -12,7 +12,7 @@
 #include "libmactyper.h"
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
-static long long lastDone = -1, lastTotal = -1, countdowns = 0;
+static long long lastDone = -1, lastTotal = -1, countdowns = 0, readies = 0;
 static int finished = -1;
 static char message[256];
 
@@ -20,6 +20,7 @@ static void callback(void *ctx, int kind, long long a, long long b, const char *
     assert(ctx == (void *)&mu);
     pthread_mutex_lock(&mu);
     if (kind == MT_EVENT_COUNTDOWN) countdowns++;
+    if (kind == MT_EVENT_READY) readies++;
     if (kind == MT_EVENT_PROGRESS) { lastDone = a; lastTotal = b; }
     if (kind == MT_EVENT_FINISHED) {
         finished = (int)a;
@@ -30,7 +31,7 @@ static void callback(void *ctx, int kind, long long a, long long b, const char *
 
 static void reset(void) {
     pthread_mutex_lock(&mu);
-    lastDone = lastTotal = -1; countdowns = 0; finished = -1; message[0] = 0;
+    lastDone = lastTotal = -1; countdowns = 0; readies = 0; finished = -1; message[0] = 0;
     pthread_mutex_unlock(&mu);
 }
 
@@ -83,6 +84,18 @@ int main(void) {
     usleep(10000);
     assert(MTStop() == 0 && MTSetPaused(1) == 0);
 
-    puts("bridge start, validation, single-job guard, pause and stop passed");
+    reset();
+    MTConfig gated = cfg;
+    gated.countdown = 0;
+    gated.wait_ready = 1;
+    assert(MTStart("gate", NULL, gated, callback, &mu) == NULL);
+    usleep(100000);
+    pthread_mutex_lock(&mu);
+    assert(readies == 1 && lastDone == -1 && finished == -1);
+    pthread_mutex_unlock(&mu);
+    assert(MTSetPaused(0) == 1);
+    assert(waitFinished(2000) == MT_FINISH_DONE && lastDone == 4);
+
+    puts("bridge start, ready gate, validation, single-job guard, pause and stop passed");
     return 0;
 }

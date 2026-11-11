@@ -38,6 +38,7 @@ type config struct {
 	typoRate  float64 // 每处可匹配的词使用错词规则的概率
 	slipRate  float64 // 每个英文字母误按相邻键的概率
 	natural   bool    // 自然节奏
+	gateStart bool    // 倒计时结束后先暂停并调用 onReady，由调用方准备好（如切换输入法）后继续
 }
 
 func (c config) validate() error {
@@ -73,6 +74,7 @@ type job struct {
 	stopOnce sync.Once
 
 	onCountdown func(seconds int)
+	onReady     func()
 	onProgress  func(done, total int)
 
 	done, total int
@@ -146,6 +148,13 @@ func (j *job) Run(input string) error {
 			j.onCountdown(i)
 		}
 		if err := j.sleep(time.Second); err != nil {
+			return err
+		}
+	}
+	if j.cfg.gateStart && j.onReady != nil {
+		j.SetPaused(true)
+		j.onReady()
+		if err := j.waitIfPaused(); err != nil {
 			return err
 		}
 	}
@@ -374,36 +383,89 @@ func commonPrefixRunes(a, b string) int {
 	return n
 }
 
-// typoMatcher 按首字符索引错词规则，同一首字符下优先匹配最长的正词。
+// typoMatcher 按首字符（小写）索引错词规则，同一首字符下优先匹配最长的正词。
+// 全小写的规则不区分大小写，例如 the 也会命中 The、THE，并按原文大小写打出错词。
 type typoMatcher struct {
-	byFirst map[rune][]typo
+	byFirst map[rune][]typoRule
+}
+
+type typoRule struct {
+	typo
+	fold  bool // 规则全为小写，匹配时忽略大小写
+	runes int
 }
 
 func newTypoMatcher(typos []typo) *typoMatcher {
-	m := &typoMatcher{byFirst: make(map[rune][]typo)}
+	m := &typoMatcher{byFirst: make(map[rune][]typoRule)}
 	for _, t := range typos {
 		first, _ := utf8.DecodeRuneInString(t.correct)
-		m.byFirst[first] = append(m.byFirst[first], t)
+		rule := typoRule{typo: t, fold: t.correct == strings.ToLower(t.correct), runes: utf8.RuneCountInString(t.correct)}
+		key := unicode.ToLower(first)
+		m.byFirst[key] = append(m.byFirst[key], rule)
 	}
 	for _, list := range m.byFirst {
-		sort.SliceStable(list, func(i, j int) bool { return len(list[i].correct) > len(list[j].correct) })
+		sort.SliceStable(list, func(i, j int) bool { return list[i].runes > list[j].runes })
 	}
 	return m
 }
 
-// match 返回 input 开头可以使用的错词规则。prev 是已输入的上一个字符，
-// 用于避免命中单词内部，例如规则 the 不会命中 other 或 there。
+// match 返回 input 开头可以使用的错词规则，correct 为原文中的实际片段。
+// prev 是已输入的上一个字符，用于避免命中单词内部，例如规则 the 不会命中 other 或 there。
 func (m *typoMatcher) match(input string, prev rune) (typo, bool) {
 	if m == nil || len(m.byFirst) == 0 {
 		return typo{}, false
 	}
 	first, _ := utf8.DecodeRuneInString(input)
-	for _, t := range m.byFirst[first] {
-		if strings.HasPrefix(input, t.correct) && atWordBoundary(prev, t.correct, input[len(t.correct):]) {
-			return t, true
+	for _, rule := range m.byFirst[unicode.ToLower(first)] {
+		segment, ok := rule.prefixOf(input)
+		if ok && atWordBoundary(prev, segment, input[len(segment):]) {
+			return typo{wrong: adaptCase(rule.wrong, segment), correct: segment}, true
 		}
 	}
 	return typo{}, false
+}
+
+func (r typoRule) prefixOf(input string) (string, bool) {
+	if strings.HasPrefix(input, r.correct) {
+		return r.correct, true
+	}
+	if !r.fold {
+		return "", false
+	}
+	end, n := 0, 0
+	for end < len(input) && n < r.runes {
+		_, size := utf8.DecodeRuneInString(input[end:])
+		end += size
+		n++
+	}
+	if n == r.runes && strings.EqualFold(input[:end], r.correct) {
+		return input[:end], true
+	}
+	return "", false
+}
+
+// adaptCase 让错词跟随原文大小写：全大写的词整体大写，首字母大写的词首字母大写。
+func adaptCase(wrong, original string) string {
+	letters, upper := 0, 0
+	for _, r := range original {
+		if unicode.IsLetter(r) {
+			letters++
+			if unicode.IsUpper(r) {
+				upper++
+			}
+		}
+	}
+	switch {
+	case letters >= 2 && upper == letters:
+		return strings.ToUpper(wrong)
+	case letters > 0:
+		first, _ := utf8.DecodeRuneInString(original)
+		if unicode.IsUpper(first) {
+			w, size := utf8.DecodeRuneInString(wrong)
+			return string(unicode.ToUpper(w)) + wrong[size:]
+		}
+	}
+	return wrong
 }
 
 func atWordBoundary(prev rune, word, rest string) bool {

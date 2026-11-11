@@ -153,6 +153,54 @@ func TestTypoMatcher(t *testing.T) {
 	}
 }
 
+func TestTypoMatcherCaseInsensitive(t *testing.T) {
+	m := newTypoMatcher([]typo{
+		{wrong: "teh", correct: "the"},
+		{wrong: "iPhnoe", correct: "iPhone"},
+	})
+	for _, tc := range []struct {
+		input, wrong, correct string
+		ok                    bool
+	}{
+		{"The end", "Teh", "The", true},
+		{"THE END", "TEH", "THE", true},
+		{"the end", "teh", "the", true},
+		{"iPhone 15", "iPhnoe", "iPhone", true},
+		{"iphone 15", "", "", false},
+		{"Theory", "", "", false},
+	} {
+		got, ok := m.match(tc.input, 0)
+		if ok != tc.ok || got.wrong != tc.wrong || got.correct != tc.correct {
+			t.Errorf("match(%q) = %+v, %v; want %q/%q, %v", tc.input, got, ok, tc.wrong, tc.correct, tc.ok)
+		}
+	}
+	s := runJob(t, config{typoRate: 1}, []typo{{wrong: "teh", correct: "the"}}, "The cat. THE DOG.", 1)
+	if s.result() != "The cat. THE DOG." || !strings.Contains(s.String(), "Teh") || !strings.Contains(s.String(), "TEH") {
+		t.Fatalf("case-preserving typo failed: %q -> %q", s, s.result())
+	}
+}
+
+func TestGateStartWaitsForReady(t *testing.T) {
+	sink := &recordSink{}
+	j := newJob(config{gateStart: true}, nil, sink, 1)
+	ready := make(chan struct{})
+	j.onReady = func() { close(ready) }
+	done := make(chan error, 1)
+	go func() { done <- j.Run("abc") }()
+	<-ready
+	time.Sleep(100 * time.Millisecond)
+	if sink.String() != "" {
+		t.Fatalf("typed before ready was acknowledged: %q", sink)
+	}
+	j.SetPaused(false)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if sink.String() != "abc" {
+		t.Fatalf("output = %q", sink)
+	}
+}
+
 func TestCommonPrefixRunes(t *testing.T) {
 	if got := commonPrefixRunes("motter", "mother"); got != 3 {
 		t.Fatalf("commonPrefixRunes() = %d, want 3", got)

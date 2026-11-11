@@ -14,6 +14,10 @@ typedef NS_ENUM(NSInteger, MTFinishReason) {
 - (void)engineDidCountdown:(NSInteger)seconds;
 - (void)engineDidProgress:(NSInteger)done total:(NSInteger)total;
 - (void)engineDidFinish:(MTFinishReason)reason message:(nullable NSString *)message;
+@optional
+/// 倒计时结束、即将开始输入（仅 config.wait_ready）。准备好后调用 continueAfterReady；
+/// 未实现此方法时引擎自动继续。
+- (void)engineIsReady;
 @end
 
 /// Go 打字引擎（静态库）的封装。只能在主线程调用。
@@ -29,6 +33,8 @@ typedef NS_ENUM(NSInteger, MTFinishReason) {
                config:(MTConfig)config
                 error:(NSString *_Nullable *_Nullable)error;
 - (BOOL)updatePaused:(BOOL)paused;
+/// 收到 engineIsReady 后继续输入；用户在此之前已暂停时保持暂停。
+- (void)continueAfterReady;
 /// 请求结束；任务真正结束后会回调 engineDidFinish:。
 - (BOOL)stop;
 @end

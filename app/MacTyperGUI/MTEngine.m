@@ -49,6 +49,10 @@ static void MTEngineCallback(void *ctx, int kind, long long a, long long b, cons
     return YES;
 }
 
+- (void)continueAfterReady {
+    if (self.running && !self.stopping && !self.paused) MTSetPaused(0);
+}
+
 - (BOOL)stop {
     if (!self.running) return NO;
     self.stopping = YES;
@@ -64,6 +68,13 @@ static void MTEngineCallback(void *ctx, int kind, long long a, long long b, cons
         break;
     case MT_EVENT_PROGRESS:
         [self.delegate engineDidProgress:(NSInteger)a total:(NSInteger)b];
+        break;
+    case MT_EVENT_READY:
+        if ([self.delegate respondsToSelector:@selector(engineIsReady)]) {
+            [self.delegate engineIsReady];
+        } else {
+            [self continueAfterReady];
+        }
         break;
     case MT_EVENT_FINISHED:
         self.running = NO;

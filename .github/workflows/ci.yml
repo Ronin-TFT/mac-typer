@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   engine:
@@ -24,6 +25,8 @@ jobs:
 
   macos:
     name: App (macOS)
+    # macOS 运行器按更高倍率计费，只在 Actions 页面手动触发（Run workflow）时运行。
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4

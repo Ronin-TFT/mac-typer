@@ -31,6 +31,7 @@ func MTStart(text, typoPath *C.char, cfg C.MTConfig, cb C.MTCallback, ctx unsafe
 		typoRate:  float64(cfg.typo_rate),
 		slipRate:  float64(cfg.slip_rate),
 		natural:   cfg.natural != 0,
+		gateStart: cfg.wait_ready != 0,
 	}
 	var sink keySink = nativeSink{}
 	if cfg.dry_run != 0 {
@@ -52,6 +53,9 @@ func MTStart(text, typoPath *C.char, cfg C.MTConfig, cb C.MTCallback, ctx unsafe
 	}
 	j.onCountdown = func(n int) {
 		C.mtNotify(cb, ctx, C.MT_EVENT_COUNTDOWN, C.longlong(n), 0, nil)
+	}
+	j.onReady = func() {
+		C.mtNotify(cb, ctx, C.MT_EVENT_READY, 0, 0, nil)
 	}
 	j.onProgress = func(done, total int) {
 		C.mtNotify(cb, ctx, C.MT_EVENT_PROGRESS, C.longlong(done), C.longlong(total), nil)

@@ -3,6 +3,7 @@
 #import <math.h>
 #import "MTDropTextView.h"
 #import "MTHotkeys.h"
+#import "MTInputSource.h"
 #import "MTUtil.h"
 
 static NSString *const MTSecondsUnit = @"秒";
@@ -67,6 +68,8 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
 @property (nonatomic, strong) NSTextField *typoRateField;
 @property (nonatomic, strong) NSTextField *slipRateField;
 @property (nonatomic, strong) NSButton *naturalCheckbox;
+@property (nonatomic, strong) NSButton *switchInputSourceCheckbox;
+@property (nonatomic, strong, nullable) id savedInputSource;
 @property (nonatomic, strong) NSArray<NSTextField *> *hotkeyFields;
 @property (nonatomic, strong) NSTextField *hotkeyDelayField;
 @property (nonatomic, strong) NSButton *keepInMenuBarCheckbox;
@@ -142,6 +145,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     self.startPending = NO;
     self.startGeneration++;
     [self.engine stop];
+    [self restoreInputSource];
     [self saveSettings];
     [self.hotkeyCenter uninstall];
     if (self.localKeyMonitor) [NSEvent removeMonitor:self.localKeyMonitor];
@@ -342,6 +346,9 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     self.hotkeyDelayField = MTField(@"0", 90);
     self.keepInMenuBarCheckbox = [NSButton checkboxWithTitle:@"关闭窗口后保留在菜单栏（快捷键继续可用）"
                                                       target:self action:@selector(keepInMenuBarChanged:)];
+    self.switchInputSourceCheckbox = [NSButton checkboxWithTitle:@"开始输入时自动切换到英文输入法，结束后恢复（避免中文输入法拦截按键）"
+                                                          target:nil action:nil];
+    self.switchInputSourceCheckbox.state = NSControlStateValueOn;
     NSTextField *tutorial = [NSTextField wrappingLabelWithString:
         @"教程：系统设置 > 隐私与安全性 > 辅助功能，打开 Mac Typer。快捷键在后台也能使用；按 Esc 取消录制，执行期间不能录制。"];
 
@@ -349,6 +356,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
         MTLabel(@"快捷键", 14, YES), hotkeyGrid,
         MTLabel(@"快捷键启动延迟（秒）", 14, YES), self.hotkeyDelayField,
         self.keepInMenuBarCheckbox,
+        self.switchInputSourceCheckbox,
         [NSButton buttonWithTitle:@"测试辅助功能权限" target:self action:@selector(testPermission:)],
         tutorial,
     ], 10);
@@ -439,6 +447,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     config->typo_rate = typoRate / 100.0;
     config->slip_rate = slipRate / 100.0;
     config->natural = self.naturalCheckbox.state == NSControlStateValueOn;
+    config->wait_ready = self.switchInputSourceCheckbox.state == NSControlStateValueOn;
     return YES;
 }
 
@@ -459,6 +468,9 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     [self.jitterUnit selectItemWithTitle:[defaults stringForKey:@"jitterUnit"] ?: @"ms"];
     self.naturalCheckbox.state = [defaults boolForKey:@"natural"] ? NSControlStateValueOn : NSControlStateValueOff;
     if ([defaults objectForKey:@"keepInMenuBar"]) self.keepInMenuBar = [defaults boolForKey:@"keepInMenuBar"];
+    if ([defaults objectForKey:@"switchInputSource"]) {
+        self.switchInputSourceCheckbox.state = [defaults boolForKey:@"switchInputSource"] ? NSControlStateValueOn : NSControlStateValueOff;
+    }
     self.keepInMenuBarCheckbox.state = self.keepInMenuBar ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
@@ -472,6 +484,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     [defaults setObject:self.jitterUnit.titleOfSelectedItem forKey:@"jitterUnit"];
     [defaults setBool:self.naturalCheckbox.state == NSControlStateValueOn forKey:@"natural"];
     [defaults setBool:self.keepInMenuBar forKey:@"keepInMenuBar"];
+    [defaults setBool:self.switchInputSourceCheckbox.state == NSControlStateValueOn forKey:@"switchInputSource"];
     NSArray<NSString *> *prefixes = @[@"start", @"pause", @"stop"];
     for (NSUInteger i = 0; i < self.hotkeys.count; i++) {
         MTHotkey *hotkey = self.hotkeys[i];
@@ -648,6 +661,18 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
     self.statusField.stringValue = [NSString stringWithFormat:@"%ld 秒后开始，请把光标放到目标输入框", (long)seconds];
 }
 
+- (void)engineIsReady {
+    // 在倒计时结束、目标输入框已获得焦点时切换，兼容“自动切换到文稿的输入法”。
+    if (!self.savedInputSource) self.savedInputSource = [MTInputSource switchToASCIICapable];
+    if (self.savedInputSource) self.statusField.stringValue = @"已临时切换到英文输入法";
+    [self.engine continueAfterReady];
+}
+
+- (void)restoreInputSource {
+    [MTInputSource restore:self.savedInputSource];
+    self.savedInputSource = nil;
+}
+
 - (void)engineDidProgress:(NSInteger)done total:(NSInteger)total {
     if (!self.typingStartedAt) {
         // 倒计时期间的暂停不计入输入用时。
@@ -663,6 +688,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
 }
 
 - (void)engineDidFinish:(MTFinishReason)reason message:(NSString *)message {
+    [self restoreInputSource];
     switch (reason) {
     case MTFinishReasonDone:
         self.progressBar.doubleValue = self.progressBar.maxValue;
@@ -741,6 +767,14 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
         return YES;
     }
     NSUInteger index = self.recordingAction - 1;
+    NSArray<NSString *> *names = @[@"开始", @"暂停/继续", @"结束"];
+    for (NSUInteger i = 0; i < self.hotkeys.count; i++) {
+        if (i != index && [self.hotkeys[i] isEqualToHotkey:hotkey]) {
+            self.statusField.stringValue = [NSString stringWithFormat:@"%@ 已用于“%@”，请换一个组合（Esc 取消）",
+                                            hotkey.displayName, names[i]];
+            return YES;
+        }
+    }
     MTHotkey *old = self.hotkeys[index];
     self.hotkeys[index] = hotkey;
     self.recordingAction = 0;

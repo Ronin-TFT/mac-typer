@@ -26,6 +26,10 @@
     return [[self alloc] initWithKeyCode:event.keyCode modifiers:mods displayName:name];
 }
 
+- (BOOL)isEqualToHotkey:(MTHotkey *)other {
+    return other && self.keyCode == other.keyCode && self.modifiers == other.modifiers;
+}
+
 - (UInt32)carbonModifiers {
     UInt32 result = 0;
     if (self.modifiers & NSEventModifierFlagCommand) result |= cmdKey;

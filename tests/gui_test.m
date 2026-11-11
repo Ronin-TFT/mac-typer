@@ -10,10 +10,11 @@
 #import "MTDropTextView.h"
 #import "MTEngine.h"
 #import "MTHotkeys.h"
+#import "MTInputSource.h"
 #import "MTUtil.h"
 
 @interface EngineObserver : NSObject <MTEngineDelegate>
-@property NSInteger countdowns, done, total;
+@property NSInteger countdowns, done, total, readies;
 @property BOOL finished;
 @property MTFinishReason reason;
 @end
@@ -21,6 +22,7 @@
 - (void)engineDidCountdown:(NSInteger)seconds { self.countdowns++; }
 - (void)engineDidProgress:(NSInteger)done total:(NSInteger)total { self.done = done; self.total = total; }
 - (void)engineDidFinish:(MTFinishReason)reason message:(NSString *)message { self.finished = YES; self.reason = reason; }
+- (void)engineIsReady { self.readies++; }
 @end
 
 static void spin(NSTimeInterval seconds, BOOL (^until)(void)) {
@@ -88,6 +90,12 @@ int main(void) {
                                          timestamp:0 windowNumber:0 context:nil characters:@"b"
                        charactersIgnoringModifiers:@"b" isARepeat:NO keyCode:11];
         assert([MTHotkey hotkeyWithEvent:plain] == nil);
+        MTHotkey *same = [[MTHotkey alloc] initWithKeyCode:11 modifiers:NSEventModifierFlagCommand | NSEventModifierFlagOption displayName:@"x"];
+        MTHotkey *other = [[MTHotkey alloc] initWithKeyCode:11 modifiers:NSEventModifierFlagCommand displayName:@"x"];
+        assert([hotkey isEqualToHotkey:same] && ![hotkey isEqualToHotkey:other]);
+
+        // 输入源查询可调用（不切换，避免影响运行测试的机器）
+        (void)[MTInputSource currentIsASCIICapable];
 
         // 引擎：完成
         EngineObserver *observer = [EngineObserver new];
@@ -130,6 +138,19 @@ int main(void) {
         assert(observer.finished && observer.reason == MTFinishReasonStopped && observer.done < 200);
         assert(![engine stop] && ![engine updatePaused:YES]);
 
+        // 引擎：wait_ready 时在准备好之前不输入
+        observer = [EngineObserver new];
+        engine.delegate = observer;
+        MTConfig gated = dryConfig();
+        gated.wait_ready = 1;
+        assert([engine startWithText:@"gate" typoPath:nil config:gated error:NULL]);
+        spin(0.3, ^BOOL { return observer.readies > 0; });
+        spin(0.1, nil);
+        assert(observer.readies == 1 && observer.done == 0 && !observer.finished);
+        [engine continueAfterReady];
+        spin(2, ^BOOL { return observer.finished; });
+        assert(observer.reason == MTFinishReasonDone && observer.done == 4);
+
         // 菜单栏模式决定关闭窗口后是否退出
         MTAppDelegate *delegate = [MTAppDelegate new];
         delegate.keepInMenuBar = NO;
@@ -137,7 +158,7 @@ int main(void) {
         delegate.keepInMenuBar = YES;
         assert(![delegate applicationShouldTerminateAfterLastWindowClosed:NSApp]);
 
-        puts("GUI utilities, text import, hotkeys, engine bridge and menu bar mode passed");
+        puts("GUI utilities, text import, hotkeys, input source, engine bridge, ready gate and menu bar mode passed");
     }
     return 0;
 }
