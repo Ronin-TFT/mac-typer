@@ -42,7 +42,7 @@ static void MTEngineCallback(void *ctx, int kind, long long a, long long b, cons
     return YES;
 }
 
-- (BOOL)setPaused:(BOOL)paused {
+- (BOOL)updatePaused:(BOOL)paused {
     if (!self.running || self.stopping) return NO;
     if (MTSetPaused(paused ? 1 : 0) == 0) return NO;
     self.paused = paused;

@@ -616,7 +616,7 @@ static void MTPin(NSView *child, NSView *parent, CGFloat inset) {
         return;
     }
     BOOL pause = !self.engine.paused;
-    if (![self.engine setPaused:pause]) {
+    if (![self.engine updatePaused:pause]) {
         self.statusField.stringValue = @"暂停失败：任务已经结束";
         return;
     }

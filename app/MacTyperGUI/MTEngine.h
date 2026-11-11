@@ -28,7 +28,7 @@ typedef NS_ENUM(NSInteger, MTFinishReason) {
              typoPath:(nullable NSString *)typoPath
                config:(MTConfig)config
                 error:(NSString *_Nullable *_Nullable)error;
-- (BOOL)setPaused:(BOOL)paused;
+- (BOOL)updatePaused:(BOOL)paused;
 /// 请求结束；任务真正结束后会回调 engineDidFinish:。
 - (BOOL)stop;
 @end

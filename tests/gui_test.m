@@ -117,18 +117,18 @@ int main(void) {
         assert([engine startWithText:[@"" stringByPaddingToLength:200 withString:@"x" startingAtIndex:0]
                             typoPath:nil config:slow error:NULL]);
         spin(0.2, nil);
-        assert([engine setPaused:YES] && engine.paused);
+        assert([engine updatePaused:YES] && engine.paused);
         spin(0.1, nil);
         NSInteger pausedAt = observer.done;
         spin(0.3, nil);
         assert(observer.done - pausedAt <= 1);
-        assert([engine setPaused:NO] && !engine.paused);
+        assert([engine updatePaused:NO] && !engine.paused);
         spin(0.1, nil);
         assert(observer.done > pausedAt);
         assert([engine stop] && engine.stopping);
         spin(2, ^BOOL { return observer.finished; });
         assert(observer.finished && observer.reason == MTFinishReasonStopped && observer.done < 200);
-        assert(![engine stop] && ![engine setPaused:YES]);
+        assert(![engine stop] && ![engine updatePaused:YES]);
 
         // 菜单栏模式决定关闭窗口后是否退出
         MTAppDelegate *delegate = [MTAppDelegate new];
