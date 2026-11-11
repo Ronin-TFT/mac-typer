@@ -39,10 +39,28 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ROOT/build/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 
-codesign --force --deep --sign - \
+# 签名：设置 SIGN_IDENTITY 时使用该证书（推荐自签名“代码签名”证书，见 README）。
+# 不再使用仅检查 identifier 的签名要求，否则任何同 identifier 的临时签名程序
+# 都能冒用 Mac Typer 的辅助功能权限。
+SIGN_IDENTITY="${SIGN_IDENTITY:-}"
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  if ! security find-identity -p codesigning | grep -qF "\"$SIGN_IDENTITY\""; then
+    echo "找不到签名证书：$SIGN_IDENTITY（用 security find-identity -p codesigning 查看）" >&2
+    exit 1
+  fi
+else
+  SIGN_IDENTITY="-"
+  echo "警告：未设置 SIGN_IDENTITY，使用临时签名。每次更新后需要重新授予辅助功能权限。" >&2
+fi
+
+codesign --force --sign "$SIGN_IDENTITY" \
+  --identifier local.ronin.mactyper.helper \
+  "$APP/Contents/Resources/mac-typer"
+codesign --force --sign "$SIGN_IDENTITY" \
   --identifier local.ronin.mactyper \
-  --requirements '=designated => identifier "local.ronin.mactyper"' \
   "$APP"
+codesign --verify --strict --verbose=2 "$APP"
+codesign -d -r- "$APP" 2>&1 | grep designated >&2
 mkdir -p "$STAGING"
 ditto "$APP" "$STAGING/Mac Typer.app"
 ln -s /Applications "$STAGING/Applications"
