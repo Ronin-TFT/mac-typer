@@ -3,6 +3,32 @@
 #import <Carbon/Carbon.h>
 #import <signal.h>
 #import <math.h>
+#import <unistd.h>
+
+static CGEventSourceRef MacTyperEventSource(void) {
+    static CGEventSourceRef source = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ source = CGEventSourceCreate(kCGEventSourceStatePrivate); });
+    return source;
+}
+
+// 使用私有事件源并清空修饰键，避免用户仍按着 ⌘/⌥ 时把字符变成快捷键。
+static void MacTyperPostKey(CGKeyCode code, const UniChar *chars, NSUInteger length) {
+    CGEventRef down = CGEventCreateKeyboardEvent(MacTyperEventSource(), code, true);
+    CGEventRef up = CGEventCreateKeyboardEvent(MacTyperEventSource(), code, false);
+    if (down && up) {
+        CGEventSetFlags(down, 0);
+        CGEventSetFlags(up, 0);
+        if (chars && length) {
+            CGEventKeyboardSetUnicodeString(down, length, chars);
+            CGEventKeyboardSetUnicodeString(up, length, chars);
+        }
+        CGEventPost(kCGHIDEventTap, down);
+        CGEventPost(kCGHIDEventTap, up);
+    }
+    if (down) CFRelease(down);
+    if (up) CFRelease(up);
+}
 
 @interface AppDelegate : NSObject <NSApplicationDelegate>
 @property NSWindow *window;
@@ -15,6 +41,7 @@
 @property NSTextField *jitterField;
 @property NSPopUpButton *jitterUnit;
 @property NSTextField *countdownField;
+@property NSTextField *typoRateField;
 @property NSTextField *startHotkeyField;
 @property NSTextField *pauseHotkeyField;
 @property NSTextField *stopHotkeyField;
@@ -27,6 +54,7 @@
 @property NSUInteger startGeneration;
 @property NSFileHandle *eventReader;
 @property BOOL acceptingEvents;
+@property BOOL countdownShown;
 @property NSString *recordingAction;
 @property NSUInteger startHotkeyCode;
 @property NSEventModifierFlags startHotkeyMods;
@@ -39,6 +67,7 @@
 @property EventHotKeyRef pauseHotkey;
 @property EventHotKeyRef stopHotkey;
 - (void)handleRegisteredHotkey:(NSNumber *)hotkeyID;
+- (void)waitWhilePaused;
 @end
 
 static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef event, void *userData) {
@@ -69,7 +98,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
         self.stopHotkeyMods = [defaults integerForKey:@"stopHotkeyMods"];
     }
     [self buildWindow];
-    for (NSString *key in @[@"delayField", @"jitterField", @"countdownField", @"typoField"]) {
+    for (NSString *key in @[@"delayField", @"jitterField", @"countdownField", @"typoRateField", @"typoField"]) {
         NSString *value = [defaults stringForKey:key];
         if (value) [[self valueForKey:key] setStringValue:value];
     }
@@ -87,15 +116,15 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app { return YES; }
 
 - (BOOL)validateSettings {
-    NSArray *fields = @[self.delayField, self.jitterField, self.countdownField, self.hotkeyDelayField];
+    NSArray *fields = @[self.delayField, self.jitterField, self.countdownField, self.hotkeyDelayField, self.typoRateField];
     NSArray *limits = @[@([self.delayUnit.titleOfSelectedItem isEqualToString:@"秒"] ? 60 : 60000),
-                        @([self.jitterUnit.titleOfSelectedItem isEqualToString:@"秒"] ? 60 : 60000), @3600, @3600];
+                        @([self.jitterUnit.titleOfSelectedItem isEqualToString:@"秒"] ? 60 : 60000), @3600, @3600, @100];
     for (NSUInteger i = 0; i < fields.count; i++) {
         NSTextField *field = fields[i];
         NSScanner *scanner = [NSScanner scannerWithString:field.stringValue];
         double value;
         if (![scanner scanDouble:&value] || !scanner.isAtEnd || !isfinite(value) || value < 0 || value > [limits[i] doubleValue] || (i == 2 && floor(value) != value)) {
-            [self showError:@"间隔和抖动须为 0–60 秒；倒计时须为 0–3600 的整数；快捷键延迟须为 0–3600 秒。"];
+            [self showError:@"间隔和抖动须为 0–60 秒；倒计时须为 0–3600 的整数；快捷键延迟须为 0–3600 秒；错词概率须为 0–100%。"];
             return NO;
         }
     }
@@ -164,6 +193,10 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     [v addSubview:[self label:@"倒计时秒" frame:NSMakeRect(442, 82, 90, 20) size:13 bold:NO]];
     self.countdownField = [self field:@"5" frame:NSMakeRect(442, 54, 90, 28)];
     [v addSubview:self.countdownField];
+
+    [v addSubview:[self label:@"错词概率 %" frame:NSMakeRect(580, 82, 110, 20) size:13 bold:NO]];
+    self.typoRateField = [self field:@"100" frame:NSMakeRect(580, 54, 90, 28)];
+    [v addSubview:self.typoRateField];
 
     item.view = v;
     [self.tabs addTabViewItem:item];
@@ -260,10 +293,15 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 - (void)saveTypoDoc:(id)sender {
     NSMutableArray *lines = [NSMutableArray array];
     NSInteger lineNumber = 0;
+    NSInteger ruleCount = 0;
     for (NSString *raw in [self.wordsView.string componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
         lineNumber++;
         NSString *line = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
         if (!line.length) continue;
+        if ([line hasPrefix:@"#"]) {
+            [lines addObject:line];
+            continue;
+        }
         NSArray *parts = [line componentsSeparatedByString:@"=>"];
         NSString *correct = parts.count == 2 ? [parts[0] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] : @"";
         NSString *wrong = parts.count == 2 ? [parts[1] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] : @"";
@@ -271,9 +309,14 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
             self.statusField.stringValue = [NSString stringWithFormat:@"第 %ld 行格式错误：请使用 原词=>错词", (long)lineNumber];
             return;
         }
+        if ([correct isEqualToString:wrong]) {
+            self.statusField.stringValue = [NSString stringWithFormat:@"第 %ld 行原词与错词相同", (long)lineNumber];
+            return;
+        }
         [lines addObject:[NSString stringWithFormat:@"%@=>%@", wrong, correct]];
+        ruleCount++;
     }
-    if (!lines.count) {
+    if (!ruleCount) {
         self.statusField.stringValue = @"没有可生成的错词规则";
         return;
     }
@@ -303,9 +346,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     self.startGeneration++;
     if (![self validateSettings]) return;
     [self saveSettings];
-    self.startPending = NO;
     self.taskPaused = NO;
-    if (self.task && self.task.isRunning) return;
     if (!CGPreflightPostEventAccess()) {
         NSString *message = @"Mac Typer 尚未获得辅助功能权限。请在设置页点“测试辅助功能权限”，只需给 Mac Typer 授权一次。";
         self.statusField.stringValue = message;
@@ -321,10 +362,14 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     NSURL *tool = [[NSBundle mainBundle] URLForResource:@"mac-typer" withExtension:nil];
     self.task = [[NSTask alloc] init];
     self.task.executableURL = tool;
-    NSMutableArray *args = [NSMutableArray arrayWithObjects:@"-event-stream", @"-s", text, @"-delay", [self durationArg:self.delayField unit:self.delayUnit], @"-jitter", [self durationArg:self.jitterField unit:self.jitterUnit], @"-countdown", [NSString stringWithFormat:@"%ld", (long)self.countdownField.doubleValue], nil];
+    // 正文通过标准输入传递：不会出现在 ps 进程列表里，也不受命令行长度限制。
+    NSMutableArray *args = [NSMutableArray arrayWithObjects:@"-event-stream", @"-stdin",
+                            @"-typo-rate", [NSString stringWithFormat:@"%.6f", self.typoRateField.doubleValue / 100.0], @"-delay", [self durationArg:self.delayField unit:self.delayUnit], @"-jitter", [self durationArg:self.jitterField unit:self.jitterUnit], @"-countdown", [NSString stringWithFormat:@"%ld", (long)self.countdownField.doubleValue], nil];
     if (self.typoField.stringValue.length > 0) [args addObjectsFromArray:@[@"-typos", self.typoField.stringValue]];
     self.task.arguments = args;
 
+    NSPipe *inputPipe = [NSPipe pipe];
+    self.task.standardInput = inputPipe;
     NSPipe *pipe = [NSPipe pipe];
     self.task.standardError = pipe;
     NSPipe *eventsPipe = [NSPipe pipe];
@@ -346,7 +391,10 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
             NSData *lineData = [eventBuffer subdataWithRange:NSMakeRange(0, range.location)];
             [eventBuffer replaceBytesInRange:NSMakeRange(0, NSMaxRange(range)) withBytes:NULL length:0];
             NSString *line = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
-            if (line) [weakSelf handleEventLine:line];
+            if (!line) continue;
+            // 子进程被 SIGSTOP 后，管道中可能仍有已缓冲的事件；暂停期间不要发送。
+            [weakSelf waitWhilePaused];
+            [weakSelf handleEventLine:line];
         }
     };
     self.task.terminationHandler = ^(NSTask *finished) {
@@ -365,17 +413,26 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     NSError *error = nil;
     self.startButton.enabled = NO;
     @synchronized (self) { self.acceptingEvents = YES; }
+    self.countdownShown = NO;
     self.statusField.stringValue = @"倒计时开始后，请把光标放到目标输入框";
+    NSFileHandle *inputWriter = inputPipe.fileHandleForWriting;
     if (![self.task launchAndReturnError:&error]) {
         @synchronized (self) { self.acceptingEvents = NO; }
         eventReader.readabilityHandler = nil;
         [eventReader closeFile];
+        [inputWriter closeAndReturnError:NULL];
         self.eventReader = nil;
         self.startButton.enabled = YES;
         self.statusField.stringValue = error.localizedDescription;
         [self showError:error.localizedDescription];
         self.task = nil;
+        return;
     }
+    NSData *textData = [text dataUsingEncoding:NSUTF8StringEncoding];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        [inputWriter writeData:textData error:NULL];
+        [inputWriter closeAndReturnError:NULL];
+    });
 }
 
 - (void)showError:(NSString *)message {
@@ -384,6 +441,15 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     alert.informativeText = message;
     [alert addButtonWithTitle:@"好"];
     [alert beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+- (void)waitWhilePaused {
+    while (self.taskPaused) {
+        @synchronized (self) {
+            if (!self.acceptingEvents) return;
+        }
+        usleep(20000);
+    }
 }
 
 - (void)togglePause:(id)sender {
@@ -431,6 +497,19 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
     } else if ([line hasPrefix:@"B"]) {
         NSInteger count = [[line substringFromIndex:1] integerValue];
         if (count > 0 && count < 10000) [self postBackspaces:count];
+    } else if ([line hasPrefix:@"C"]) {
+        NSInteger seconds = [[line substringFromIndex:1] integerValue];
+        self.countdownShown = YES;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.statusField.stringValue = [NSString stringWithFormat:@"%ld 秒后开始，请把光标放到目标输入框", (long)seconds];
+        });
+        return;
+    }
+    if (self.countdownShown) {
+        self.countdownShown = NO;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.task && !self.taskPaused) self.statusField.stringValue = @"正在输入…";
+        });
     }
     }
 }
@@ -438,31 +517,20 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 - (void)postText:(NSString *)text {
     NSUInteger length = text.length;
     if (!length) return;
+    if (length == 1) {
+        unichar c = [text characterAtIndex:0];
+        if (c == '\n' || c == '\r') { MacTyperPostKey(36, NULL, 0); return; }
+        if (c == '\t') { MacTyperPostKey(48, NULL, 0); return; }
+    }
     UniChar *chars = malloc(sizeof(UniChar) * length);
     if (!chars) return;
     [text getCharacters:chars range:NSMakeRange(0, length)];
-    CGEventRef down = CGEventCreateKeyboardEvent(NULL, 0, true);
-    CGEventRef up = CGEventCreateKeyboardEvent(NULL, 0, false);
-    if (down && up) {
-        CGEventKeyboardSetUnicodeString(down, length, chars);
-        CGEventKeyboardSetUnicodeString(up, length, chars);
-        CGEventPost(kCGHIDEventTap, down);
-        CGEventPost(kCGHIDEventTap, up);
-    }
-    if (down) CFRelease(down);
-    if (up) CFRelease(up);
+    MacTyperPostKey(0, chars, length);
     free(chars);
 }
 
 - (void)postBackspaces:(NSInteger)count {
-    for (NSInteger i = 0; i < count; i++) {
-        CGEventRef down = CGEventCreateKeyboardEvent(NULL, 51, true);
-        CGEventRef up = CGEventCreateKeyboardEvent(NULL, 51, false);
-        if (down) CGEventPost(kCGHIDEventTap, down);
-        if (up) CGEventPost(kCGHIDEventTap, up);
-        if (down) CFRelease(down);
-        if (up) CFRelease(up);
-    }
+    for (NSInteger i = 0; i < count; i++) MacTyperPostKey(51, NULL, 0);
 }
 
 - (void)recordStartHotkey:(id)sender {
@@ -599,7 +667,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 
 - (void)saveSettings {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    for (NSString *key in @[@"delayField", @"jitterField", @"countdownField", @"typoField"]) {
+    for (NSString *key in @[@"delayField", @"jitterField", @"countdownField", @"typoRateField", @"typoField"]) {
         [defaults setObject:[[self valueForKey:key] stringValue] forKey:key];
     }
     [defaults setObject:self.delayUnit.titleOfSelectedItem forKey:@"delayUnit"];
@@ -625,8 +693,7 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
         self.statusField.stringValue = @"快捷键已触发，等待启动";
         double delay = self.hotkeyDelayField.doubleValue;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (!self.startPending || generation != self.startGeneration) return;
-            [self startTyping:nil];
+            [self startAfterModifiersReleased:generation attempts:0];
         });
         break;
     }
@@ -637,6 +704,21 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
         [self stopTyping:nil];
         break;
     }
+}
+
+// 等用户松开快捷键的修饰键再启动（最多等 5 秒），避免首个字符被当成快捷键。
+- (void)startAfterModifiersReleased:(NSUInteger)generation attempts:(NSUInteger)attempts {
+    if (!self.startPending || generation != self.startGeneration) return;
+    NSEventModifierFlags held = NSEvent.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagOption |
+                                                         NSEventModifierFlagControl | NSEventModifierFlagShift);
+    if (held && attempts < 100) {
+        if (attempts == 0) self.statusField.stringValue = @"请松开快捷键后开始";
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+            [self startAfterModifiersReleased:generation attempts:attempts + 1];
+        });
+        return;
+    }
+    [self startTyping:nil];
 }
 
 - (NSString *)hotkeyName:(NSEvent *)event {
@@ -669,6 +751,8 @@ static OSStatus MacTyperHotkeyHandler(EventHandlerCallRef nextHandler, EventRef 
 
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
+        // 子进程提前退出时写标准输入不能让整个应用被 SIGPIPE 杀掉。
+        signal(SIGPIPE, SIG_IGN);
         NSApplication *app = [NSApplication sharedApplication];
         AppDelegate *delegate = [AppDelegate new];
         app.delegate = delegate;

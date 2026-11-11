@@ -2,7 +2,7 @@
 .cache/
 .tools/
 build/
-dist/Mac Typer.app/
+dist/
 mac-typer
 MacTyper.command
 sources/

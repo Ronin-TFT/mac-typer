@@ -5,70 +5,75 @@ package main
 #include <ApplicationServices/ApplicationServices.h>
 #include <stdlib.h>
 
-static int postText(const char *s) {
+// 使用私有事件源并清空修饰键标志，避免用户仍按着 ⌘/⌥ 时
+// 把普通字符变成快捷键（例如 ⌘A 全选后被覆盖）。
+static CGEventSourceRef typerSource(void) {
+	static CGEventSourceRef source = NULL;
+	if (!source) source = CGEventSourceCreate(kCGEventSourceStatePrivate);
+	return source;
+}
+
+static int postKey(CGKeyCode code, const UniChar *chars, CFIndex len) {
 	if (!CGPreflightPostEventAccess()) return 0;
+	CGEventRef down = CGEventCreateKeyboardEvent(typerSource(), code, true);
+	CGEventRef up = CGEventCreateKeyboardEvent(typerSource(), code, false);
+	if (!down || !up) {
+		if (down) CFRelease(down);
+		if (up) CFRelease(up);
+		return 0;
+	}
+	CGEventSetFlags(down, 0);
+	CGEventSetFlags(up, 0);
+	if (chars && len > 0) {
+		CGEventKeyboardSetUnicodeString(down, len, chars);
+		CGEventKeyboardSetUnicodeString(up, len, chars);
+	}
+	CGEventPost(kCGHIDEventTap, down);
+	CGEventPost(kCGHIDEventTap, up);
+	CFRelease(down);
+	CFRelease(up);
+	return 1;
+}
+
+static int postText(const char *s) {
 	CFStringRef str = CFStringCreateWithCString(NULL, s, kCFStringEncodingUTF8);
 	if (!str) return 0;
 	CFIndex len = CFStringGetLength(str);
-	UniChar *chars = malloc(sizeof(UniChar) * len);
+	if (len == 1) {
+		UniChar c = CFStringGetCharacterAtIndex(str, 0);
+		if (c == '\n' || c == '\r') {
+			CFRelease(str);
+			return postKey(36, NULL, 0);
+		}
+		if (c == '\t') {
+			CFRelease(str);
+			return postKey(48, NULL, 0);
+		}
+	}
+	UniChar *chars = malloc(sizeof(UniChar) * (len > 0 ? len : 1));
 	if (!chars) {
 		CFRelease(str);
 		return 0;
 	}
 	CFStringGetCharacters(str, CFRangeMake(0, len), chars);
-	CGEventRef down = CGEventCreateKeyboardEvent(NULL, 0, true);
-	CGEventRef up = CGEventCreateKeyboardEvent(NULL, 0, false);
-	if (!down || !up) {
-		if (down) CFRelease(down);
-		if (up) CFRelease(up);
-		free(chars);
-		CFRelease(str);
-		return 0;
-	}
-	CGEventKeyboardSetUnicodeString(down, len, chars);
-	CGEventKeyboardSetUnicodeString(up, len, chars);
-	CGEventPost(kCGHIDEventTap, down);
-	CGEventPost(kCGHIDEventTap, up);
-	CFRelease(down);
-	CFRelease(up);
+	int ok = postKey(0, chars, len);
 	free(chars);
 	CFRelease(str);
-	return 1;
+	return ok;
 }
 
 static int postBackspace(void) {
-	if (!CGPreflightPostEventAccess()) return 0;
-	CGEventRef down = CGEventCreateKeyboardEvent(NULL, 51, true);
-	CGEventRef up = CGEventCreateKeyboardEvent(NULL, 51, false);
-	if (!down || !up) {
-		if (down) CFRelease(down);
-		if (up) CFRelease(up);
-		return 0;
-	}
-	CGEventPost(kCGHIDEventTap, down);
-	CGEventPost(kCGHIDEventTap, up);
-	CFRelease(down);
-	CFRelease(up);
-	return 1;
+	return postKey(51, NULL, 0);
 }
 */
 import "C"
 
 import (
-	"encoding/base64"
 	"fmt"
-	"io"
-	"os"
 	"unsafe"
 )
 
-var eventWriter io.Writer = os.Stdout
-
-func keystroke(s string) error {
-	if eventStream {
-		_, err := fmt.Fprintln(eventWriter, encodeTextEvent(s))
-		return err
-	}
+func postNativeText(s string) error {
 	cs := C.CString(s)
 	defer C.free(unsafe.Pointer(cs))
 	if C.postText(cs) == 0 {
@@ -77,23 +82,9 @@ func keystroke(s string) error {
 	return nil
 }
 
-func sendBackspace(n int) error {
-	if eventStream {
-		_, err := fmt.Fprintln(eventWriter, encodeBackspaceEvent(n))
-		return err
-	}
-	for i := 0; i < n; i++ {
-		if C.postBackspace() == 0 {
-			return fmt.Errorf("系统删除失败：无法创建键盘事件")
-		}
+func postNativeBackspace() error {
+	if C.postBackspace() == 0 {
+		return fmt.Errorf("系统删除失败：无法创建键盘事件")
 	}
 	return nil
-}
-
-func encodeTextEvent(s string) string {
-	return "T" + base64.StdEncoding.EncodeToString([]byte(s))
-}
-
-func encodeBackspaceEvent(n int) string {
-	return fmt.Sprintf("B%d", n)
 }

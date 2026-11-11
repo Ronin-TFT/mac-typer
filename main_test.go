@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,6 +23,9 @@ func TestInvalidInputEmitsNoEvents(t *testing.T) {
 		{text: "hello", countdown: -1},
 		{text: "hello", countdown: 3601},
 		{text: "valid prefix\xff"},
+		{text: "hello", typoRate: -0.1},
+		{text: "hello", typoRate: 1.5},
+		{text: "hello", typoRate: math.NaN()},
 	} {
 		if err := run(opts); err == nil {
 			t.Fatalf("accepted invalid options: %+v", opts)
@@ -52,13 +57,87 @@ func (w *pauseAfterFirstWrite) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func TestNextTypo(t *testing.T) {
-	got, ok := nextTypo("the address", []typo{
+func TestTypoMatcher(t *testing.T) {
+	m := newTypoMatcher([]typo{
 		{wrong: "teh", correct: "the"},
+		{wrong: "tehre", correct: "there"},
 		{wrong: "adress", correct: "address"},
+		{wrong: "你号", correct: "你好"},
 	})
-	if !ok || got.wrong != "teh" || got.correct != "the" {
-		t.Fatalf("nextTypo() = %+v, %v", got, ok)
+	for _, tc := range []struct {
+		input string
+		prev  rune
+		want  string
+		ok    bool
+	}{
+		{"the address", 0, "teh", true},
+		{"there is", ' ', "tehre", true},
+		{"the", 'o', "", false},
+		{"thereby", ' ', "", false},
+		{"theory", 0, "", false},
+		{"the.", ' ', "teh", true},
+		{"你好世界", '说', "你号", true},
+	} {
+		got, ok := m.match(tc.input, tc.prev)
+		if ok != tc.ok || got.wrong != tc.want {
+			t.Errorf("match(%q, %q) = %+v, %v; want %q, %v", tc.input, tc.prev, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func captureEvents(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	oldStream, oldWriter := eventStream, eventWriter
+	t.Cleanup(func() { eventStream, eventWriter = oldStream, oldWriter })
+	eventStream = true
+	var output bytes.Buffer
+	eventWriter = &output
+	return &output
+}
+
+func TestTypeTextHonoursRateAndBoundaries(t *testing.T) {
+	m := newTypoMatcher([]typo{{wrong: "teh", correct: "the"}})
+	output := captureEvents(t)
+	if err := typeText("other the", m, 0, 0, 0, rand.New(rand.NewSource(1))); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "B") {
+		t.Fatalf("rate 0 still produced typos: %q", output.String())
+	}
+	output.Reset()
+	if err := typeText("other the", m, 1, 0, 0, rand.New(rand.NewSource(1))); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(output.String(), "B1"); got < 1 || got > 3 {
+		t.Fatalf("expected exactly one typo correction for the standalone word, got %q", output.String())
+	}
+	if !strings.HasPrefix(output.String(), strings.Join([]string{
+		encodeTextEvent("o"), encodeTextEvent("t"), encodeTextEvent("h"),
+	}, "\n")) {
+		t.Fatalf("typo was applied inside \"other\": %q", output.String())
+	}
+}
+
+func TestRunReadsStdinAndNormalizesNewlines(t *testing.T) {
+	output := captureEvents(t)
+	if err := run(options{stdin: strings.NewReader("a\r\nb\rc"), typoRate: 1}); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		encodeTextEvent("a"), encodeTextEvent("\n"), encodeTextEvent("b"), encodeTextEvent("\n"), encodeTextEvent("c"),
+	}, "\n") + "\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestCountdownEmitsEvents(t *testing.T) {
+	output := captureEvents(t)
+	if err := countdownTick(3); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "C3\n" {
+		t.Fatalf("countdown output = %q", output.String())
 	}
 }
 
@@ -69,7 +148,7 @@ func TestInvalidTypoLibraryEmitsNoEvents(t *testing.T) {
 	var output bytes.Buffer
 	eventWriter = &output
 	path := filepath.Join(t.TempDir(), "typos.txt")
-	for _, contents := range []string{"mot\xff=>mother", "motter=>mother=>other", "=>mother", "motter=>"} {
+	for _, contents := range []string{"mot\xff=>mother", "motter=>mother=>other", "=>mother", "motter=>", "the=>the"} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}

@@ -20,6 +20,13 @@ int main(void) {
         delegate.acceptingEvents = YES;
         [delegate handleEventLine:@"TQQ=="];
         assert(delegate.posted == 1);
+        [delegate handleEventLine:@"C3"];
+        assert(delegate.posted == 1 && delegate.countdownShown);
+        delegate.taskPaused = YES;
+        delegate.acceptingEvents = NO;
+        [delegate waitWhilePaused];
+        delegate.taskPaused = NO;
+        delegate.acceptingEvents = YES;
         delegate.startPending = YES;
         NSUInteger generation = delegate.startGeneration;
         [delegate stopTyping:nil];
@@ -65,7 +72,7 @@ int main(void) {
         [unit selectItemWithTitle:@"秒"];
         field.stringValue = @"0.25";
         assert([[delegate durationArg:field unit:unit] isEqualToString:@"250000000ns"]);
-        puts("GUI cancellation, pause/resume, paused child cleanup and numeric arguments passed");
+        puts("GUI countdown events, paused event gating, cancellation, pause/resume, paused child cleanup and numeric arguments passed");
     }
     return 0;
 }

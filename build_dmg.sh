@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
 APP="$ROOT/dist/Mac Typer.app"
 DMG="$ROOT/dist/MacTyper.dmg"
 STAGING="$ROOT/build/dmg"
