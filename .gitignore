@@ -7,3 +7,4 @@ mac-typer
 MacTyper.command
 sources/
 AGENTS.md
+*.syso

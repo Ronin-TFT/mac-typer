@@ -11,12 +11,14 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"mac-typer/internal/engine"
 )
 
 // 图形界面同一时间只运行一个任务。
 var (
 	bridgeMu  sync.Mutex
-	bridgeJob *job
+	bridgeJob *engine.Job
 )
 
 // MTStart 校验参数并在后台开始任务。成功返回 NULL；失败返回错误信息，
@@ -24,18 +26,18 @@ var (
 //
 //export MTStart
 func MTStart(text, typoPath *C.char, cfg C.MTConfig, cb C.MTCallback, ctx unsafe.Pointer) *C.char {
-	conf := config{
-		delay:     time.Duration(cfg.delay_ns),
-		jitter:    time.Duration(cfg.jitter_ns),
-		countdown: int(cfg.countdown),
-		typoRate:  float64(cfg.typo_rate),
-		slipRate:  float64(cfg.slip_rate),
-		natural:   cfg.natural != 0,
-		gateStart: cfg.wait_ready != 0,
+	conf := engine.Config{
+		Delay:     time.Duration(cfg.delay_ns),
+		Jitter:    time.Duration(cfg.jitter_ns),
+		Countdown: int(cfg.countdown),
+		TypoRate:  float64(cfg.typo_rate),
+		SlipRate:  float64(cfg.slip_rate),
+		Natural:   cfg.natural != 0,
+		GateStart: cfg.wait_ready != 0,
 	}
-	var sink keySink = nativeSink{}
+	var sink engine.Sink = nativeSink{}
 	if cfg.dry_run != 0 {
-		sink = nopSink{}
+		sink = engine.NopSink{}
 	}
 	path := ""
 	if typoPath != nil {
@@ -51,13 +53,13 @@ func MTStart(text, typoPath *C.char, cfg C.MTConfig, cb C.MTCallback, ctx unsafe
 	if err != nil {
 		return C.CString(err.Error())
 	}
-	j.onCountdown = func(n int) {
+	j.OnCountdown = func(n int) {
 		C.mtNotify(cb, ctx, C.MT_EVENT_COUNTDOWN, C.longlong(n), 0, nil)
 	}
-	j.onReady = func() {
+	j.OnReady = func() {
 		C.mtNotify(cb, ctx, C.MT_EVENT_READY, 0, 0, nil)
 	}
-	j.onProgress = func(done, total int) {
+	j.OnProgress = func(done, total int) {
 		C.mtNotify(cb, ctx, C.MT_EVENT_PROGRESS, C.longlong(done), C.longlong(total), nil)
 	}
 	bridgeJob = j
@@ -73,7 +75,7 @@ func MTStart(text, typoPath *C.char, cfg C.MTConfig, cb C.MTCallback, ctx unsafe
 		reason := C.MT_FINISH_DONE
 		var msg *C.char
 		switch {
-		case errors.Is(err, errStopped):
+		case errors.Is(err, engine.ErrStopped):
 			reason = C.MT_FINISH_STOPPED
 		case err != nil:
 			reason = C.MT_FINISH_ERROR

@@ -22,6 +22,30 @@ jobs:
           go build -buildmode=c-archive -o build/libmactyper.a .
           cc -Wall -Werror -I build -I . tests/bridge_test.c build/libmactyper.a -lpthread -o build/bridge-test
           build/bridge-test
+      - name: Build Windows app
+        run: |
+          for arch in amd64 arm64; do
+            GOOS=windows GOARCH=$arch go vet ./cmd/mactyper-windows
+            GOOS=windows GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-H windowsgui -s -w" \
+              -o dist/MacTyper-windows-$arch.exe ./cmd/mactyper-windows
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacTyper-windows
+          path: dist/MacTyper-windows-*.exe
+
+  windows:
+    name: Tests (Windows)
+    # Windows 运行器按更高倍率计费，只在 Actions 页面手动触发时运行。
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: go test ./internal/... ./typos/... ./cmd/...
+      - run: go build -ldflags "-H windowsgui" -o MacTyper.exe ./cmd/mactyper-windows
 
   macos:
     name: App (macOS)

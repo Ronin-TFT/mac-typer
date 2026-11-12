@@ -38,6 +38,27 @@ macOS 图形化模拟键入工具。打字引擎使用 Go（编译为静态库�
 
 真实目标输入及后台快捷键仍需在目标机器上验收；自动化测试不代表所有输入框兼容。
 
+## Windows 版
+
+Windows 版与 macOS 版共用同一个打字引擎，界面使用系统自带的 WebView2，按键通过 SendInput 发送。
+
+- 支持：自然节奏、错词库（含内置常用词库）、手误、进度与剩余时间、拖入/导入文本、全局快捷键（默认 `Ctrl+Alt+B / N / M`）、检查更新。
+- 暂不支持：录屏、菜单栏（托盘）模式、自动切换输入法（Windows 的 Unicode 按键一般不经过输入法）。
+- 要求 Windows 10/11 与 [WebView2 运行时](https://go.microsoft.com/fwlink/p/?LinkId=2124703)（Windows 11 自带）；首次运行如提示需要，按提示安装即可。
+- 不需要额外权限；目标程序以管理员身份运行时，Mac Typer 也需以管理员身份运行。
+- 设置保存在 `%APPDATA%\MacTyper\settings.json`。
+
+下载：从 Release 下载 `MacTyper-windows-amd64.exe`（大多数电脑）或 `MacTyper-windows-arm64.exe`（ARM 设备），双击运行，无需安装。
+未签名的 exe 首次运行时 SmartScreen 可能提示，点“更多信息 → 仍要运行”。
+
+构建（在 macOS、Linux 或 Windows 上均可，不需要 C 编译器）：
+
+```sh
+./build_windows.sh
+```
+
+每次推送后，GitHub Actions 也会自动编译两个 exe，可在对应运行的 Artifacts 中下载。
+
 ## 安装
 
 从 [最新 Release](https://github.com/Ronin-TFT/mac-typer/releases/latest) 下载 `MacTyper.dmg`，打开后把 **Mac Typer** 拖入“应用程序”。
@@ -114,7 +135,9 @@ GitHub Actions 每次推送自动跑 Linux 测试；macOS 测试需在 Actions �
 
 | 文件 | 作用 |
 |---|---|
-| `engine.go` | 打字引擎：节奏、错词、手误、暂停/结束、进度 |
+| `internal/engine/` | 打字引擎（macOS 与 Windows 共用）：节奏、错词、手误、暂停/结束、进度 |
+| `typos/` | 内置常用错词库（`common.txt`，嵌入程序） |
+| `cmd/mactyper-windows/` | Windows 版：WebView2 界面（`ui.html`）、SendInput、全局快捷键 |
 | `bridge.go`、`engine_bridge.h` | 导出给界面的 C 接口 |
 | `keys_darwin.go` | 发送系统键盘事件 |
 | `main.go` | 命令行入口、输入与错词库读取 |

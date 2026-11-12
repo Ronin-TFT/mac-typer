@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Mac Typer</title>
+<style>
+:root {
+  --bg: #f5f5f7; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --border: #d2d2d7;
+  --accent: #0a64d6; --accent-text: #ffffff; --danger: #c9302c; --field: #ffffff;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1e1e1e; --panel: #2a2a2c; --text: #f2f2f7; --muted: #a1a1a6; --border: #48484a;
+          --accent: #3b8cf0; --field: #1c1c1e; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px "Segoe UI", "Microsoft YaHei UI", sans-serif;
+       display: flex; flex-direction: column; }
+header { padding: 14px 22px 6px; }
+header h1 { margin: 0; font-size: 22px; }
+header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--border); }
+nav button { border: none; background: none; color: var(--muted); padding: 8px 14px; font: inherit; cursor: pointer;
+             border-bottom: 2px solid transparent; }
+nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+main { flex: 1; overflow: auto; padding: 14px 20px; }
+section { display: none; height: 100%; flex-direction: column; gap: 10px; }
+section.active { display: flex; }
+h2 { font-size: 15px; margin: 4px 0 0; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--muted); font-size: 12px; }
+textarea, input[type=text], select { background: var(--field); color: var(--text); border: 1px solid var(--border);
+       border-radius: 6px; padding: 6px 8px; font: inherit; }
+textarea { width: 100%; resize: none; font-family: Consolas, "Cascadia Mono", "Microsoft YaHei UI", monospace; }
+#text { flex: 1; min-height: 160px; }
+#words { flex: 1; min-height: 200px; }
+input.num { width: 72px; }
+.params { display: grid; grid-template-columns: repeat(5, auto); gap: 4px 22px; justify-content: start; }
+.params label { color: var(--muted); font-size: 12px; }
+button.btn { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+             padding: 6px 14px; font: inherit; cursor: pointer; }
+button.btn:hover:not(:disabled) { border-color: var(--accent); }
+button.btn:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.hotkeys { display: grid; grid-template-columns: 90px 160px auto; gap: 8px 12px; align-items: center; }
+.key { border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; background: var(--field); text-align: center; }
+.key.recording { border-color: var(--accent); color: var(--accent); }
+footer { display: flex; gap: 8px; align-items: center; padding: 10px 20px 14px; border-top: 1px solid var(--border); }
+#statusBox { flex: 1; min-width: 0; }
+#status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+progress { width: 100%; height: 6px; margin-top: 4px; accent-color: var(--accent); }
+footer .btn { min-width: 84px; }
+body.dragging main { outline: 2px dashed var(--accent); outline-offset: -6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mac Typer</h1>
+  <p>模拟键入 · 自然节奏 · 错词与手误（Windows 版）</p>
+</header>
+<nav>
+  <button data-tab="main" class="active">输入</button>
+  <button data-tab="tool">错词库工具</button>
+  <button data-tab="settings">设置</button>
+</nav>
+<main>
+  <section id="tab-main" class="active">
+    <div class="row">
+      <h2>输入内容</h2><span class="muted">可直接拖入文本文件</span><span class="grow"></span>
+      <button class="btn" id="importBtn">导入文本…</button>
+      <input type="file" id="importFile" hidden>
+    </div>
+    <textarea id="text" spellcheck="false">this is the address</textarea>
+    <div class="row">
+      <label for="typoMode">错词库</label>
+      <select id="typoMode">
+        <option value="none">不使用</option>
+        <option value="builtin">内置常用词库</option>
+        <option value="custom">自定义文件</option>
+      </select>
+      <button class="btn" id="typoFileBtn">选择文件…</button>
+      <input type="file" id="typoFile" hidden>
+      <span class="muted grow" id="typoName"></span>
+    </div>
+    <div class="params">
+      <label>基础间隔</label><label>随机抖动</label><label>倒计时秒</label><label>错词概率 %</label><label>手误概率 %</label>
+      <div class="row"><input class="num" id="delay" type="text" value="80"><select id="delayUnit"><option>ms</option><option>秒</option></select></div>
+      <div class="row"><input class="num" id="jitter" type="text" value="60"><select id="jitterUnit"><option>ms</option><option>秒</option></select></div>
+      <input class="num" id="countdown" type="text" value="5">
+      <input class="num" id="typoRate" type="text" value="100">
+      <input class="num" id="slipRate" type="text" value="0">
+    </div>
+    <label class="row"><input type="checkbox" id="natural"> 自然节奏：标点和换行后停顿更久、词内连击更快、偶尔犹豫</label>
+    <div class="muted">手误：英文字母按概率误按相邻键（有时多打一个字母才发现），随后删除并改正。</div>
+  </section>
+
+  <section id="tab-tool">
+    <h2>每行写：原词=>错词，例如 mother=>motter；# 开头为注释</h2>
+    <textarea id="words" spellcheck="false">mother=>motter
+address=>adress
+the=>teh</textarea>
+    <div class="row">
+      <button class="btn primary" id="useWords">生成并使用</button>
+      <button class="btn" id="downloadWords">下载为文件</button>
+    </div>
+  </section>
+
+  <section id="tab-settings">
+    <h2>快捷键（后台也可用）</h2>
+    <div class="hotkeys" id="hotkeys"></div>
+    <div class="muted">至少包含 Ctrl、Alt 或 Win；录制时按 Esc 取消，执行期间不能录制。</div>
+    <h2>快捷键启动延迟（秒）</h2>
+    <input class="num" id="hotkeyDelay" type="text" value="0">
+    <h2>更新</h2>
+    <div class="row">
+      <label class="row"><input type="checkbox" id="autoUpdate" checked> 启动时检查新版本（每天最多一次，只访问 GitHub）</label>
+      <button class="btn" id="checkUpdateBtn">立即检查更新</button>
+    </div>
+    <div class="muted" id="versionText"></div>
+    <h2>说明</h2>
+    <div class="muted">按键使用系统 SendInput 发送，不需要额外权限。如果目标程序以管理员身份运行，Mac Typer 也需要以管理员身份运行才能输入。
+      倒计时结束后会等你松开 Ctrl/Alt/Shift/Win 再开始输入。</div>
+  </section>
+</main>
+<footer>
+  <div id="statusBox"><div id="status">准备就绪</div><progress id="progress" max="1" value="0" hidden></progress></div>
+  <button class="btn primary" id="startBtn">开始</button>
+  <button class="btn" id="pauseBtn">暂停</button>
+  <button class="btn" id="stopBtn">结束</button>
+</footer>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const ACTIONS = ['开始', '暂停/继续', '结束'];
+const state = { running: false, paused: false, stopping: false, pending: false, gen: 0,
+                startedAt: null, pausedAt: null, pausedTotal: 0, recording: 0, manualUpdate: false };
+let info = { version: '', builtinCount: 0, defaultHotkeys: [] };
+let settings = {};
+let hotkeys = [];
+let typoText = '';
+
+const setStatus = msg => { $('status').textContent = msg; $('status').title = msg; };
+const errText = e => (e && e.message) ? e.message : String(e);
+
+// ---------- 标签页 ----------
+document.querySelectorAll('nav button').forEach(btn => btn.addEventListener('click', () => showTab(btn.dataset.tab)));
+function showTab(name) {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('active', s.id === 'tab-' + name));
+}
+
+// ---------- 数值 ----------
+function parseNumber(id, max, integer) {
+  const raw = $(id).value.trim();
+  if (!/^\d+(\.\d+)?([eE][+-]?\d+)?$/.test(raw)) return NaN;
+  const v = Number(raw);
+  if (!isFinite(v) || v < 0 || v > max || (integer && Math.floor(v) !== v)) return NaN;
+  return v;
+}
+function readRequest() {
+  const delaySec = $('delayUnit').value === '秒', jitterSec = $('jitterUnit').value === '秒';
+  const delay = parseNumber('delay', delaySec ? 60 : 60000), jitter = parseNumber('jitter', jitterSec ? 60 : 60000);
+  const countdown = parseNumber('countdown', 3600, true);
+  const typoRate = parseNumber('typoRate', 100), slipRate = parseNumber('slipRate', 100);
+  if ([delay, jitter, countdown, typoRate, slipRate].some(isNaN)) {
+    throw new Error('间隔和抖动须为 0–60 秒；倒计时须为 0–3600 的整数；错词和手误概率须为 0–100%。');
+  }
+  return {
+    text: $('text').value, delayMs: delay * (delaySec ? 1000 : 1), jitterMs: jitter * (jitterSec ? 1000 : 1),
+    countdown, typoRate, slipRate, natural: $('natural').checked,
+    typoMode: $('typoMode').value, typoText: typoText,
+  };
+}
+
+// ---------- 设置 ----------
+const FIELDS = ['delay', 'delayUnit', 'jitter', 'jitterUnit', 'countdown', 'typoRate', 'slipRate', 'typoMode', 'hotkeyDelay'];
+let saveTimer = 0;
+function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 300); }
+function saveNow() {
+  FIELDS.forEach(f => settings[f] = $(f).value);
+  settings.natural = $('natural').checked;
+  settings.autoUpdate = $('autoUpdate').checked;
+  settings.typoText = typoText;
+  settings.typoName = $('typoName').textContent;
+  settings.hotkeys = hotkeys;
+  return saveSettings(settings).catch(e => setStatus('保存设置失败：' + errText(e)));
+}
+function applySettings() {
+  FIELDS.forEach(f => { if (typeof settings[f] === 'string') $(f).value = settings[f]; });
+  $('natural').checked = !!settings.natural;
+  $('autoUpdate').checked = settings.autoUpdate !== false;
+  typoText = settings.typoText || '';
+  $('typoName').textContent = settings.typoName || '';
+  hotkeys = Array.isArray(settings.hotkeys) && settings.hotkeys.length === 3 ? settings.hotkeys : info.defaultHotkeys;
+  updateTypoMode(false);
+}
+[...FIELDS, 'natural', 'autoUpdate'].forEach(id => $(id).addEventListener('change', scheduleSave));
+
+// ---------- 错词库 ----------
+function updateTypoMode(adjustRate) {
+  const mode = $('typoMode').value;
+  $('typoFileBtn').hidden = mode !== 'custom';
+  $('typoName').hidden = mode === 'none';
+  if (mode === 'builtin') {
+    $('typoName').textContent = `内置常用词库（${info.builtinCount} 条：英文拼写 + 中文错别字）`;
+    if (adjustRate && $('typoRate').value.trim() === '100') {
+      $('typoRate').value = '20';
+      setStatus('已使用内置常用错词库，错词概率已调为 20%');
+    }
+  } else if (mode === 'custom' && !typoText) {
+    $('typoName').textContent = '尚未选择文件';
+  }
+}
+$('typoMode').addEventListener('change', () => { updateTypoMode(true); scheduleSave(); });
+$('typoFileBtn').addEventListener('click', () => $('typoFile').click());
+$('typoFile').addEventListener('change', async () => {
+  const file = $('typoFile').files[0];
+  $('typoFile').value = '';
+  if (file) await useCustomTypos(await readTextFile(file).catch(e => { setStatus('读取失败：' + errText(e)); return null; }), file.name);
+});
+async function useCustomTypos(text, name) {
+  if (text == null) return;
+  try {
+    const count = await validateTypos(text);
+    typoText = text;
+    $('typoMode').value = 'custom';
+    $('typoName').textContent = `${name}（${count} 条）`;
+    updateTypoMode(false);
+    scheduleSave();
+    setStatus(`已使用错词库 ${name}`);
+  } catch (e) { setStatus('错词库无效：' + errText(e)); }
+}
+
+function buildTypoDoc() {
+  const out = [];
+  let rules = 0;
+  const lines = $('words').value.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (line.startsWith('#')) { out.push(line); continue; }
+    const parts = line.split('=>');
+    const correct = parts.length === 2 ? parts[0].trim() : '', wrong = parts.length === 2 ? parts[1].trim() : '';
+    if (parts.length !== 2 || !correct || !wrong) throw new Error(`第 ${i + 1} 行格式错误：请使用 原词=>错词`);
+    if (correct === wrong) throw new Error(`第 ${i + 1} 行原词与错词相同`);
+    out.push(`${wrong}=>${correct}`);
+    rules++;
+  }
+  if (!rules) throw new Error('没有可生成的错词规则');
+  return out.join('\n') + '\n';
+}
+$('useWords').addEventListener('click', async () => {
+  try { await useCustomTypos(buildTypoDoc(), '错词库工具生成'); showTab('main'); } catch (e) { setStatus(errText(e)); }
+});
+$('downloadWords').addEventListener('click', () => {
+  try {
+    const url = URL.createObjectURL(new Blob([buildTypoDoc()], { type: 'text/plain;charset=utf-8' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: 'typos.txt' });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) { setStatus(errText(e)); }
+});
+
+// ---------- 导入文本 ----------
+async function readTextFile(file) {
+  if (file.size > 10 * 1024 * 1024) throw new Error('文件超过 10 MB');
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return new TextDecoder('utf-16le').decode(buf.subarray(2));
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) return new TextDecoder('utf-16be').decode(buf.subarray(2));
+  if (buf.includes(0)) throw new Error('不是可识别的纯文本文件（支持 UTF-8、UTF-16、GB18030）');
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf).replace(/^﻿/, ''); }
+  catch { return new TextDecoder('gb18030').decode(buf); }
+}
+async function importFile(file) {
+  try {
+    const text = await readTextFile(file);
+    $('text').value = text;
+    showTab('main');
+    setStatus(`已导入 ${file.name}（${text.length} 字）`);
+  } catch (e) { setStatus('导入失败：' + errText(e)); }
+}
+$('importBtn').addEventListener('click', () => $('importFile').click());
+$('importFile').addEventListener('change', () => { const f = $('importFile').files[0]; $('importFile').value = ''; if (f) importFile(f); });
+document.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragging'); });
+document.addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  document.body.classList.remove('dragging');
+  const file = e.dataTransfer && e.dataTransfer.files[0];
+  if (file) importFile(file);
+});
+
+// ---------- 执行 ----------
+function updateControls() {
+  $('startBtn').disabled = state.running || state.pending;
+  $('pauseBtn').disabled = !state.running || state.stopping;
+  $('pauseBtn').textContent = state.paused ? '继续' : '暂停';
+  $('stopBtn').disabled = !state.running && !state.pending;
+  document.querySelectorAll('.record').forEach(b => b.disabled = state.running || state.pending);
+}
+async function doStart() {
+  if (state.running) return;
+  state.pending = false;
+  state.gen++;
+  let req;
+  try { req = readRequest(); } catch (e) { setStatus(errText(e)); alert(errText(e)); updateControls(); return; }
+  if (!req.text.trim()) { setStatus('请输入内容'); updateControls(); return; }
+  saveNow();
+  try { await startTyping(req); } catch (e) { setStatus(errText(e)); alert(errText(e)); updateControls(); return; }
+  Object.assign(state, { running: true, paused: false, stopping: false, startedAt: null, pausedAt: null, pausedTotal: 0 });
+  $('progress').hidden = false;
+  $('progress').value = 0;
+  setStatus(req.countdown > 0 ? '倒计时开始，请把光标放到目标输入框' : '正在输入…');
+  updateControls();
+}
+async function togglePause() {
+  if (!state.running || state.stopping) { setStatus(state.pending ? '任务仍在等待启动，暂时不能暂停' : '没有正在执行的任务'); return; }
+  const pause = !state.paused;
+  try { await setPaused(pause); } catch (e) { setStatus('暂停失败：' + errText(e)); return; }
+  state.paused = pause;
+  if (pause) { state.pausedAt = Date.now(); setStatus('已暂停'); }
+  else { if (state.pausedAt) state.pausedTotal += Date.now() - state.pausedAt; state.pausedAt = null; setStatus('继续输入'); }
+  updateControls();
+}
+async function doStop() {
+  state.gen++;
+  const wasPending = state.pending;
+  state.pending = false;
+  if (!state.running) { setStatus(wasPending ? '已取消启动' : '没有正在执行的任务'); updateControls(); return; }
+  state.stopping = true;
+  state.paused = false;
+  await stopTyping();
+  setStatus('正在结束');
+  updateControls();
+}
+$('startBtn').addEventListener('click', doStart);
+$('pauseBtn').addEventListener('click', togglePause);
+$('stopBtn').addEventListener('click', doStop);
+
+function duration(sec) {
+  const t = Math.max(0, Math.round(sec));
+  const pad = n => String(n).padStart(2, '0');
+  return t >= 3600 ? `${Math.floor(t / 3600)}:${pad(Math.floor(t / 60) % 60)}:${pad(t % 60)}` : `${Math.floor(t / 60)}:${pad(t % 60)}`;
+}
+
+window.onEngine = ev => {
+  if (ev.type === 'countdown') {
+    if (!state.stopping && !state.paused) setStatus(`${ev.seconds} 秒后开始，请把光标放到目标输入框`);
+  } else if (ev.type === 'progress') {
+    if (!state.startedAt) { state.startedAt = Date.now(); state.pausedTotal = 0; if (state.pausedAt) state.pausedAt = state.startedAt; }
+    $('progress').max = Math.max(ev.total, 1);
+    $('progress').value = ev.done;
+    if (state.stopping || state.paused) return;
+    let text = `已输入 ${ev.done}/${ev.total}`;
+    const active = (Date.now() - state.startedAt - state.pausedTotal) / 1000;
+    if (ev.done >= 5 && ev.done < ev.total && active > 0) text += ` · 约剩 ${duration(active / ev.done * (ev.total - ev.done))}`;
+    setStatus(text);
+  } else if (ev.type === 'finished') {
+    Object.assign(state, { running: false, paused: false, stopping: false });
+    if (ev.reason === 'done') { $('progress').value = $('progress').max; setStatus('完成'); }
+    else if (ev.reason === 'stopped') { $('progress').hidden = true; setStatus('已结束'); }
+    else { $('progress').hidden = true; setStatus(ev.message || '执行失败'); alert(ev.message || '执行失败'); }
+    updateControls();
+  } else if (ev.type === 'update') {
+    handleUpdate(ev);
+  }
+};
+
+// ---------- 快捷键 ----------
+function renderHotkeys() {
+  const box = $('hotkeys');
+  box.innerHTML = '';
+  ACTIONS.forEach((name, i) => {
+    const label = document.createElement('div'); label.textContent = name;
+    const key = document.createElement('div'); key.className = 'key' + (state.recording === i + 1 ? ' recording' : '');
+    key.textContent = state.recording === i + 1 ? '请按下新快捷键…' : (hotkeys[i] ? hotkeys[i].name : '');
+    const btn = document.createElement('button'); btn.className = 'btn record'; btn.textContent = '录制';
+    btn.addEventListener('click', () => startRecording(i + 1));
+    box.append(label, key, btn);
+  });
+  updateControls();
+}
+async function applyHotkeys(list) {
+  await registerHotkeys(list);
+  hotkeys = list;
+  renderHotkeys();
+  scheduleSave();
+}
+async function startRecording(index) {
+  if (state.running || state.pending) { setStatus('执行期间不能录制快捷键'); return; }
+  try { await registerHotkeys([]); } catch (e) { setStatus(errText(e)); return; }
+  state.recording = index;
+  renderHotkeys();
+  setStatus(`请按下新的${ACTIONS[index - 1]}快捷键（Esc 取消）`);
+}
+function keyName(e) {
+  if (/^Key[A-Z]$/.test(e.code)) return e.code.slice(3);
+  if (/^Digit\d$/.test(e.code)) return e.code.slice(5);
+  if (/^F\d{1,2}$/.test(e.code)) return e.code;
+  const map = { Space: 'Space', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace', Home: 'Home', End: 'End',
+                PageUp: 'PageUp', PageDown: 'PageDown', Insert: 'Insert', Delete: 'Delete',
+                ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
+  return map[e.code] || e.key.toUpperCase();
+}
+window.addEventListener('keydown', async e => {
+  if (!state.recording) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const index = state.recording;
+  if (e.key === 'Escape') {
+    state.recording = 0;
+    await applyHotkeys(hotkeys).catch(err => setStatus(errText(err)));
+    setStatus('已取消快捷键录制');
+    return;
+  }
+  if (['Control', 'Alt', 'Shift', 'Meta', 'OS'].includes(e.key)) return;
+  const mods = (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.shiftKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+  if (!(mods & 0xB)) { setStatus('快捷键至少要包含 Ctrl、Alt 或 Win'); return; }
+  const parts = [];
+  if (e.ctrlKey) parts.push('Ctrl');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.metaKey) parts.push('Win');
+  const key = { vk: e.keyCode, mods, name: parts.concat(keyName(e)).join('+') };
+  const clash = hotkeys.findIndex((k, i) => i !== index - 1 && k.vk === key.vk && k.mods === key.mods);
+  if (clash >= 0) { setStatus(`${key.name} 已用于“${ACTIONS[clash]}”，请换一个组合（Esc 取消）`); return; }
+  const next = hotkeys.slice();
+  next[index - 1] = key;
+  state.recording = 0;
+  try { await applyHotkeys(next); setStatus('快捷键已更新，后台可用'); }
+  catch (err) { await applyHotkeys(hotkeys).catch(() => {}); setStatus('快捷键不可用，已恢复原设置：' + errText(err)); }
+}, true);
+
+window.onHotkey = id => {
+  if (state.recording) return;
+  if (id === 1) {
+    if (state.pending || state.running) return;
+    try { readRequest(); } catch (e) { setStatus(errText(e)); return; }
+    const delay = parseNumber('hotkeyDelay', 3600);
+    if (isNaN(delay)) { setStatus('快捷键启动延迟须为 0–3600 秒'); return; }
+    const gen = ++state.gen;
+    state.pending = true;
+    setStatus('快捷键已触发，等待启动');
+    updateControls();
+    setTimeout(() => { if (state.pending && gen === state.gen) doStart(); }, delay * 1000);
+  } else if (id === 2) {
+    togglePause();
+  } else if (id === 3) {
+    doStop();
+  }
+};
+
+// ---------- 更新 ----------
+function handleUpdate(ev) {
+  const manual = state.manualUpdate;
+  state.manualUpdate = false;
+  if (ev.error) { if (manual) setStatus('检查更新失败：' + ev.error); return; }
+  if (!ev.newer) { if (manual) setStatus(`已是最新版本（${info.version}）`); return; }
+  if (state.running) { setStatus(`有新版本 ${ev.latest}，结束后可在设置页下载`); return; }
+  if (confirm(`发现新版本 ${ev.latest}（当前 ${info.version}）。是否打开下载页面？`)) openReleasePage(ev.url);
+}
+$('checkUpdateBtn').addEventListener('click', () => { state.manualUpdate = true; setStatus('正在检查更新…'); checkUpdate(); });
+
+// ---------- 启动 ----------
+(async () => {
+  try {
+    info = await appInfo();
+    settings = await loadSettings() || {};
+  } catch (e) { setStatus('读取设置失败：' + errText(e)); }
+  $('versionText').textContent = `当前版本 ${info.version}`;
+  applySettings();
+  renderHotkeys();
+  try { await registerHotkeys(hotkeys); } catch (e) { setStatus(errText(e)); }
+  if ($('autoUpdate').checked && Date.now() - (settings.lastUpdateCheck || 0) > 24 * 3600 * 1000) {
+    settings.lastUpdateCheck = Date.now();
+    saveNow();
+    checkUpdate();
+  }
+})();
+</script>
+</body>
+</html>

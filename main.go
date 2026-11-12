@@ -1,9 +1,8 @@
-// Mac Typer 命令行入口。图形界面把同一个包编译成静态库（-buildmode=c-archive），
+// Mac Typer 命令行入口（macOS）。图形界面把同一个包编译成静态库（-buildmode=c-archive），
 // 通过 bridge.go 导出的函数调用打字引擎，此时 main 函数不会执行。
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -14,20 +13,16 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf8"
-)
 
-type typo struct {
-	wrong   string
-	correct string
-}
+	"mac-typer/internal/engine"
+)
 
 type options struct {
 	text     string
 	textFile string
 	typoFile string
 	stdin    io.Reader
-	cfg      config
+	cfg      engine.Config
 }
 
 func main() {
@@ -48,13 +43,13 @@ func main() {
 		text:     *text,
 		textFile: *textFile,
 		typoFile: *typoFile,
-		cfg: config{
-			delay:     *baseDelay,
-			jitter:    *jitter,
-			countdown: *countdown,
-			typoRate:  *typoRate,
-			slipRate:  *slipRate,
-			natural:   *natural,
+		cfg: engine.Config{
+			Delay:     *baseDelay,
+			Jitter:    *jitter,
+			Countdown: *countdown,
+			TypoRate:  *typoRate,
+			SlipRate:  *slipRate,
+			Natural:   *natural,
 		},
 	}
 	if *readStdin {
@@ -74,32 +69,22 @@ func main() {
 }
 
 // prepare 校验配置、正文和错词库，全部通过后才返回可执行的任务。
-func prepare(cfg config, input, typoFile string, sink keySink) (*job, string, error) {
-	if err := cfg.validate(); err != nil {
+func prepare(cfg engine.Config, input, typoFile string, sink engine.Sink) (*engine.Job, string, error) {
+	if err := cfg.Validate(); err != nil {
 		return nil, "", err
 	}
-	input, err := prepareInput(input)
+	input, err := engine.PrepareInput(input)
 	if err != nil {
 		return nil, "", err
 	}
-	typos, err := loadTypos(typoFile)
+	typos, err := engine.LoadTypos(typoFile)
 	if err != nil {
 		return nil, "", err
 	}
-	return newJob(cfg, typos, sink, time.Now().UnixNano()), input, nil
+	return engine.NewJob(cfg, typos, sink, time.Now().UnixNano()), input, nil
 }
 
-func prepareInput(input string) (string, error) {
-	if strings.TrimSpace(input) == "" {
-		return "", fmt.Errorf("没有可输入内容")
-	}
-	if !utf8.ValidString(input) {
-		return "", fmt.Errorf("输入文本不是有效 UTF-8")
-	}
-	return normalizeNewlines(input), nil
-}
-
-func run(opts options, sink keySink) error {
+func run(opts options, sink engine.Sink) error {
 	input, err := loadInput(opts.text, opts.textFile, opts.stdin)
 	if err != nil {
 		return err
@@ -108,7 +93,7 @@ func run(opts options, sink keySink) error {
 	if err != nil {
 		return err
 	}
-	j.onCountdown = func(n int) { fmt.Fprintf(os.Stderr, "%d...\n", n) }
+	j.OnCountdown = func(n int) { fmt.Fprintf(os.Stderr, "%d...\n", n) }
 
 	// 命令行模式下可用 kill -USR1 <pid> 暂停/继续。
 	ch := make(chan os.Signal, 1)
@@ -131,15 +116,15 @@ func guiOptions(defaults options) (options, error) {
 	if err != nil {
 		return options{}, err
 	}
-	delay, err := promptDuration("基础间隔，例如 80ms", defaults.cfg.delay)
+	delay, err := promptDuration("基础间隔，例如 80ms", defaults.cfg.Delay)
 	if err != nil {
 		return options{}, err
 	}
-	jitter, err := promptDuration("随机抖动，例如 60ms", defaults.cfg.jitter)
+	jitter, err := promptDuration("随机抖动，例如 60ms", defaults.cfg.Jitter)
 	if err != nil {
 		return options{}, err
 	}
-	countdown, err := promptInt("开始前倒计时秒数", defaults.cfg.countdown)
+	countdown, err := promptInt("开始前倒计时秒数", defaults.cfg.Countdown)
 	if err != nil {
 		return options{}, err
 	}
@@ -148,7 +133,7 @@ func guiOptions(defaults options) (options, error) {
 		return options{}, err
 	}
 	cfg := defaults.cfg
-	cfg.delay, cfg.jitter, cfg.countdown = delay, jitter, countdown
+	cfg.Delay, cfg.Jitter, cfg.Countdown = delay, jitter, countdown
 	return options{text: text, typoFile: typoFile, cfg: cfg}, nil
 }
 
@@ -209,53 +194,6 @@ func loadInput(text, path string, stdin io.Reader) (string, error) {
 		return "", err
 	}
 	return string(b), nil
-}
-
-func loadTypos(path string) ([]typo, error) {
-	if path == "" {
-		return nil, nil
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var out []typo
-	scanner := bufio.NewScanner(f)
-	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if !utf8.ValidString(line) {
-			return nil, fmt.Errorf("错词库第 %d 行不是有效 UTF-8", lineNumber)
-		}
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.Split(line, "=>")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("错词库格式错误：%q，应该是 错词=>正词", line)
-		}
-
-		wrong := strings.TrimSpace(parts[0])
-		correct := strings.TrimSpace(parts[1])
-		if wrong == "" || correct == "" {
-			return nil, fmt.Errorf("错词库不能有空词：%q", line)
-		}
-		if wrong == correct {
-			return nil, fmt.Errorf("错词库第 %d 行错词与正词相同：%q", lineNumber, line)
-		}
-		out = append(out, typo{wrong: wrong, correct: correct})
-	}
-	return out, scanner.Err()
-}
-
-func normalizeNewlines(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	return strings.ReplaceAll(s, "\r", "\n")
 }
 
 func exit(err error) {

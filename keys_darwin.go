@@ -73,6 +73,12 @@ import (
 	"unsafe"
 )
 
+// nativeSink 通过系统键盘事件发送按键。
+type nativeSink struct{}
+
+func (nativeSink) Text(s string) error { return postNativeText(s) }
+func (nativeSink) Backspace() error    { return postNativeBackspace() }
+
 func postNativeText(s string) error {
 	cs := C.CString(s)
 	defer C.free(unsafe.Pointer(cs))

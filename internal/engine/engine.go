@@ -1,10 +1,15 @@
-package main
+// Package engine 是 Mac Typer 的打字引擎：节奏、错词、手误、暂停/结束与进度。
+// 与平台无关，按键由调用方提供的 Sink 发送。
+package engine
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -14,44 +19,39 @@ import (
 	"unicode/utf8"
 )
 
-// keySink 接收引擎产生的按键。正式运行时由系统键盘事件实现，测试时记录下来。
-type keySink interface {
+// Sink 接收引擎产生的按键。正式运行时由系统键盘事件实现，测试时记录下来。
+type Sink interface {
 	Text(s string) error
 	Backspace() error
 }
 
-type nativeSink struct{}
+// NopSink 丢弃所有按键，用于图形界面的集成测试。
+type NopSink struct{}
 
-func (nativeSink) Text(s string) error { return postNativeText(s) }
-func (nativeSink) Backspace() error    { return postNativeBackspace() }
+func (NopSink) Text(string) error { return nil }
+func (NopSink) Backspace() error  { return nil }
 
-// nopSink 丢弃所有按键，用于图形界面的集成测试。
-type nopSink struct{}
-
-func (nopSink) Text(string) error { return nil }
-func (nopSink) Backspace() error  { return nil }
-
-type config struct {
-	delay     time.Duration
-	jitter    time.Duration
-	countdown int
-	typoRate  float64 // 每处可匹配的词使用错词规则的概率
-	slipRate  float64 // 每个英文字母误按相邻键的概率
-	natural   bool    // 自然节奏
-	gateStart bool    // 倒计时结束后先暂停并调用 onReady，由调用方准备好（如切换输入法）后继续
+type Config struct {
+	Delay     time.Duration
+	Jitter    time.Duration
+	Countdown int
+	TypoRate  float64 // 每处可匹配的词使用错词规则的概率
+	SlipRate  float64 // 每个英文字母误按相邻键的概率
+	Natural   bool    // 自然节奏
+	GateStart bool    // 倒计时结束后先暂停并调用 onReady，由调用方准备好（如切换输入法）后继续
 }
 
-func (c config) validate() error {
-	if c.delay < 0 || c.delay > time.Minute || c.jitter < 0 || c.jitter > time.Minute {
+func (c Config) Validate() error {
+	if c.Delay < 0 || c.Delay > time.Minute || c.Jitter < 0 || c.Jitter > time.Minute {
 		return fmt.Errorf("间隔和抖动须在 0–60 秒之间")
 	}
-	if c.countdown < 0 || c.countdown > 3600 {
+	if c.Countdown < 0 || c.Countdown > 3600 {
 		return fmt.Errorf("倒计时须在 0–3600 秒之间")
 	}
-	if !validRate(c.typoRate) {
+	if !validRate(c.TypoRate) {
 		return fmt.Errorf("错词概率须在 0–1 之间")
 	}
-	if !validRate(c.slipRate) {
+	if !validRate(c.SlipRate) {
 		return fmt.Errorf("手误概率须在 0–1 之间")
 	}
 	return nil
@@ -59,13 +59,84 @@ func (c config) validate() error {
 
 func validRate(v float64) bool { return !math.IsNaN(v) && v >= 0 && v <= 1 }
 
-var errStopped = errors.New("已结束")
+// Typo 是一条错词规则：先输入 Wrong，再改成 Correct。
+type Typo struct {
+	Wrong   string
+	Correct string
+}
 
-// job 是一次键入任务。Run 在调用方的 goroutine 中执行；Stop 和 SetPaused
+// PrepareInput 检查正文并统一换行符。
+func PrepareInput(input string) (string, error) {
+	if strings.TrimSpace(input) == "" {
+		return "", fmt.Errorf("没有可输入内容")
+	}
+	if !utf8.ValidString(input) {
+		return "", fmt.Errorf("输入文本不是有效 UTF-8")
+	}
+	return NormalizeNewlines(input), nil
+}
+
+// NormalizeNewlines 把 \r\n 和 \r 统一为 \n。
+func NormalizeNewlines(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
+}
+
+// LoadTypos 读取错词库文件；path 为空时返回空规则。
+func LoadTypos(path string) ([]Typo, error) {
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return ParseTypos(f)
+}
+
+// ParseTypos 解析错词库：每行“错词=>正词”，# 开头为注释。
+func ParseTypos(r io.Reader) ([]Typo, error) {
+	var out []Typo
+	scanner := bufio.NewScanner(r)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+		if lineNumber == 1 {
+			line = strings.TrimPrefix(line, "\uFEFF")
+		}
+		if !utf8.ValidString(line) {
+			return nil, fmt.Errorf("错词库第 %d 行不是有效 UTF-8", lineNumber)
+		}
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, "=>")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("错词库格式错误：%q，应该是 错词=>正词", line)
+		}
+		wrong := strings.TrimSpace(parts[0])
+		correct := strings.TrimSpace(parts[1])
+		if wrong == "" || correct == "" {
+			return nil, fmt.Errorf("错词库不能有空词：%q", line)
+		}
+		if wrong == correct {
+			return nil, fmt.Errorf("错词库第 %d 行错词与正词相同：%q", lineNumber, line)
+		}
+		out = append(out, Typo{Wrong: wrong, Correct: correct})
+	}
+	return out, scanner.Err()
+}
+
+// ErrStopped 表示任务被 Stop 结束。
+var ErrStopped = errors.New("已结束")
+
+// Job 是一次键入任务。Run 在调用方的 goroutine 中执行；Stop 和 SetPaused
 // 可以从任意 goroutine 调用。
-type job struct {
-	cfg     config
-	sink    keySink
+type Job struct {
+	cfg     Config
+	sink    Sink
 	matcher *typoMatcher
 	r       *rand.Rand
 
@@ -73,17 +144,17 @@ type job struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 
-	onCountdown func(seconds int)
-	onReady     func()
-	onProgress  func(done, total int)
+	OnCountdown func(seconds int)
+	OnReady     func()
+	OnProgress  func(done, total int)
 
 	done, total int
 	prev        rune // 已消耗的上一个原文字符，用于词边界判断
 	lastTyped   rune // 上一个实际按下的字符，用于节奏计算
 }
 
-func newJob(cfg config, typos []typo, sink keySink, seed int64) *job {
-	return &job{
+func NewJob(cfg Config, typos []Typo, sink Sink, seed int64) *Job {
+	return &Job{
 		cfg:     cfg,
 		sink:    sink,
 		matcher: newTypoMatcher(typos),
@@ -92,10 +163,10 @@ func newJob(cfg config, typos []typo, sink keySink, seed int64) *job {
 	}
 }
 
-func (j *job) Stop()            { j.stopOnce.Do(func() { close(j.stop) }) }
-func (j *job) SetPaused(p bool) { j.paused.Store(p) }
-func (j *job) Paused() bool     { return j.paused.Load() }
-func (j *job) TogglePause() (now bool) {
+func (j *Job) Stop()            { j.stopOnce.Do(func() { close(j.stop) }) }
+func (j *Job) SetPaused(p bool) { j.paused.Store(p) }
+func (j *Job) Paused() bool     { return j.paused.Load() }
+func (j *Job) TogglePause() (now bool) {
 	for {
 		old := j.paused.Load()
 		if j.paused.CompareAndSwap(old, !old) {
@@ -104,17 +175,17 @@ func (j *job) TogglePause() (now bool) {
 	}
 }
 
-func (j *job) checkStop() error {
+func (j *Job) checkStop() error {
 	select {
 	case <-j.stop:
-		return errStopped
+		return ErrStopped
 	default:
 		return nil
 	}
 }
 
 // sleep 等待 d，期间可被 Stop 立即打断。
-func (j *job) sleep(d time.Duration) error {
+func (j *Job) sleep(d time.Duration) error {
 	if d <= 0 {
 		return j.checkStop()
 	}
@@ -122,13 +193,13 @@ func (j *job) sleep(d time.Duration) error {
 	defer t.Stop()
 	select {
 	case <-j.stop:
-		return errStopped
+		return ErrStopped
 	case <-t.C:
 		return nil
 	}
 }
 
-func (j *job) waitIfPaused() error {
+func (j *Job) waitIfPaused() error {
 	for j.paused.Load() {
 		if err := j.sleep(50 * time.Millisecond); err != nil {
 			return err
@@ -138,22 +209,22 @@ func (j *job) waitIfPaused() error {
 }
 
 // Run 执行倒计时并输入 input。input 应已经过 prepareInput 处理。
-func (j *job) Run(input string) error {
+func (j *Job) Run(input string) error {
 	j.total = utf8.RuneCountInString(input)
-	for i := j.cfg.countdown; i > 0; i-- {
+	for i := j.cfg.Countdown; i > 0; i-- {
 		if err := j.waitIfPaused(); err != nil {
 			return err
 		}
-		if j.onCountdown != nil {
-			j.onCountdown(i)
+		if j.OnCountdown != nil {
+			j.OnCountdown(i)
 		}
 		if err := j.sleep(time.Second); err != nil {
 			return err
 		}
 	}
-	if j.cfg.gateStart && j.onReady != nil {
+	if j.cfg.GateStart && j.OnReady != nil {
 		j.SetPaused(true)
-		j.onReady()
+		j.OnReady()
 		if err := j.waitIfPaused(); err != nil {
 			return err
 		}
@@ -172,40 +243,40 @@ func (j *job) Run(input string) error {
 	return nil
 }
 
-func (j *job) reportProgress() {
-	if j.onProgress != nil {
-		j.onProgress(j.done, j.total)
+func (j *Job) reportProgress() {
+	if j.OnProgress != nil {
+		j.OnProgress(j.done, j.total)
 	}
 }
 
 // advance 记录已完成输入的原文片段。
-func (j *job) advance(consumed string) {
+func (j *Job) advance(consumed string) {
 	j.done += utf8.RuneCountInString(consumed)
 	j.prev, _ = utf8.DecodeLastRuneInString(consumed)
 	j.reportProgress()
 }
 
 // step 输入 input 开头的一段内容，返回消耗的字节数。
-func (j *job) step(input string) (int, error) {
+func (j *Job) step(input string) (int, error) {
 	if t, ok := j.matcher.match(input, j.prev); ok {
 		var err error
-		if j.r.Float64() < j.cfg.typoRate {
+		if j.r.Float64() < j.cfg.TypoRate {
 			err = j.typeTypo(t)
 		} else {
-			err = j.typeString(t.correct)
+			err = j.typeString(t.Correct)
 		}
 		if err != nil {
 			return 0, err
 		}
-		j.advance(t.correct)
-		return len(t.correct), nil
+		j.advance(t.Correct)
+		return len(t.Correct), nil
 	}
 
 	ch, size := utf8.DecodeRuneInString(input)
 	if ch == utf8.RuneError && size == 1 {
 		return 0, fmt.Errorf("输入文本不是有效 UTF-8")
 	}
-	if j.cfg.slipRate > 0 && isSlipCandidate(ch) && j.r.Float64() < j.cfg.slipRate {
+	if j.cfg.SlipRate > 0 && isSlipCandidate(ch) && j.r.Float64() < j.cfg.SlipRate {
 		return j.typeSlip(input, size)
 	}
 	if err := j.typeRune(ch); err != nil {
@@ -215,7 +286,7 @@ func (j *job) step(input string) (int, error) {
 	return size, nil
 }
 
-func (j *job) typeRune(ch rune) error {
+func (j *Job) typeRune(ch rune) error {
 	if err := j.waitIfPaused(); err != nil {
 		return err
 	}
@@ -227,7 +298,7 @@ func (j *job) typeRune(ch rune) error {
 	return j.sleep(d)
 }
 
-func (j *job) typeString(s string) error {
+func (j *Job) typeString(s string) error {
 	for _, ch := range s {
 		if err := j.typeRune(ch); err != nil {
 			return err
@@ -236,7 +307,7 @@ func (j *job) typeString(s string) error {
 	return nil
 }
 
-func (j *job) backspace(n int) error {
+func (j *Job) backspace(n int) error {
 	for i := 0; i < n; i++ {
 		if err := j.waitIfPaused(); err != nil {
 			return err
@@ -252,19 +323,19 @@ func (j *job) backspace(n int) error {
 }
 
 // typeTypo 先输入错词，再删除整个错词或只删除错误部分，最后补上正词。
-func (j *job) typeTypo(t typo) error {
-	if err := j.typeString(t.wrong); err != nil {
+func (j *Job) typeTypo(t Typo) error {
+	if err := j.typeString(t.Wrong); err != nil {
 		return err
 	}
 	if err := j.sleep(j.reactionDelay()); err != nil {
 		return err
 	}
-	prefix := commonPrefixRunes(t.wrong, t.correct)
-	deleteRunes := utf8.RuneCountInString(t.wrong)
-	retype := t.correct
+	prefix := commonPrefixRunes(t.Wrong, t.Correct)
+	deleteRunes := utf8.RuneCountInString(t.Wrong)
+	retype := t.Correct
 	if prefix > 0 && j.r.Intn(2) == 0 {
 		deleteRunes -= prefix
-		retype = string([]rune(t.correct)[prefix:])
+		retype = string([]rune(t.Correct)[prefix:])
 	}
 	if err := j.backspace(deleteRunes); err != nil {
 		return err
@@ -273,7 +344,7 @@ func (j *job) typeTypo(t typo) error {
 }
 
 // typeSlip 误按相邻键；有时会多打一个字母才发现，然后删除并改正。
-func (j *job) typeSlip(input string, size int) (int, error) {
+func (j *Job) typeSlip(input string, size int) (int, error) {
 	ch, _ := utf8.DecodeRuneInString(input)
 	consumed := input[:size]
 	typed := 1
@@ -300,18 +371,18 @@ func (j *job) typeSlip(input string, size int) (int, error) {
 	return len(consumed), nil
 }
 
-func (j *job) baseInterval() time.Duration {
-	d := j.cfg.delay
-	if j.cfg.jitter > 0 {
-		d += time.Duration(j.r.Int63n(int64(j.cfg.jitter)))
+func (j *Job) baseInterval() time.Duration {
+	d := j.cfg.Delay
+	if j.cfg.Jitter > 0 {
+		d += time.Duration(j.r.Int63n(int64(j.cfg.Jitter)))
 	}
 	return d
 }
 
 // interval 返回按下 typed 之后到下一个按键的等待时间。
-func (j *job) interval(typed rune) time.Duration {
+func (j *Job) interval(typed rune) time.Duration {
 	d := j.baseInterval()
-	if !j.cfg.natural {
+	if !j.cfg.Natural {
 		return d
 	}
 	f := math.Exp(j.r.NormFloat64()*0.25) * rhythmFactor(j.lastTyped, typed)
@@ -321,18 +392,18 @@ func (j *job) interval(typed rune) time.Duration {
 	return time.Duration(float64(d) * f)
 }
 
-func (j *job) backspaceInterval() time.Duration {
+func (j *Job) backspaceInterval() time.Duration {
 	d := j.baseInterval()
-	if !j.cfg.natural {
+	if !j.cfg.Natural {
 		return d
 	}
 	return time.Duration(float64(d) * 0.75 * math.Exp(j.r.NormFloat64()*0.2))
 }
 
 // reactionDelay 是打错后发现错误的停顿。
-func (j *job) reactionDelay() time.Duration {
+func (j *Job) reactionDelay() time.Duration {
 	d := j.baseInterval()
-	if !j.cfg.natural {
+	if !j.cfg.Natural {
 		return d
 	}
 	return time.Duration(float64(d) * (2 + j.r.Float64()*2))
@@ -390,16 +461,16 @@ type typoMatcher struct {
 }
 
 type typoRule struct {
-	typo
+	Typo
 	fold  bool // 规则全为小写，匹配时忽略大小写
 	runes int
 }
 
-func newTypoMatcher(typos []typo) *typoMatcher {
+func newTypoMatcher(typos []Typo) *typoMatcher {
 	m := &typoMatcher{byFirst: make(map[rune][]typoRule)}
 	for _, t := range typos {
-		first, _ := utf8.DecodeRuneInString(t.correct)
-		rule := typoRule{typo: t, fold: t.correct == strings.ToLower(t.correct), runes: utf8.RuneCountInString(t.correct)}
+		first, _ := utf8.DecodeRuneInString(t.Correct)
+		rule := typoRule{Typo: t, fold: t.Correct == strings.ToLower(t.Correct), runes: utf8.RuneCountInString(t.Correct)}
 		key := unicode.ToLower(first)
 		m.byFirst[key] = append(m.byFirst[key], rule)
 	}
@@ -411,23 +482,23 @@ func newTypoMatcher(typos []typo) *typoMatcher {
 
 // match 返回 input 开头可以使用的错词规则，correct 为原文中的实际片段。
 // prev 是已输入的上一个字符，用于避免命中单词内部，例如规则 the 不会命中 other 或 there。
-func (m *typoMatcher) match(input string, prev rune) (typo, bool) {
+func (m *typoMatcher) match(input string, prev rune) (Typo, bool) {
 	if m == nil || len(m.byFirst) == 0 {
-		return typo{}, false
+		return Typo{}, false
 	}
 	first, _ := utf8.DecodeRuneInString(input)
 	for _, rule := range m.byFirst[unicode.ToLower(first)] {
 		segment, ok := rule.prefixOf(input)
 		if ok && atWordBoundary(prev, segment, input[len(segment):]) {
-			return typo{wrong: adaptCase(rule.wrong, segment), correct: segment}, true
+			return Typo{Wrong: adaptCase(rule.Wrong, segment), Correct: segment}, true
 		}
 	}
-	return typo{}, false
+	return Typo{}, false
 }
 
 func (r typoRule) prefixOf(input string) (string, bool) {
-	if strings.HasPrefix(input, r.correct) {
-		return r.correct, true
+	if strings.HasPrefix(input, r.Correct) {
+		return r.Correct, true
 	}
 	if !r.fold {
 		return "", false
@@ -438,7 +509,7 @@ func (r typoRule) prefixOf(input string) (string, bool) {
 		end += size
 		n++
 	}
-	if n == r.runes && strings.EqualFold(input[:end], r.correct) {
+	if n == r.runes && strings.EqualFold(input[:end], r.Correct) {
 		return input[:end], true
 	}
 	return "", false
