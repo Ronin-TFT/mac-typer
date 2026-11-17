@@ -33,6 +33,10 @@ macOS 图形化模拟键入工具。核心使用 Go，界面使用原生 AppKit�
 真实目标输入及后台快捷键仍需在目标机器上验收；自动化测试不代表所有输入框兼容。
 当前发布包为 Apple Silicon，使用临时签名，未进行 Developer ID 公证。
 
+## 网站
+
+`web/` 目录是 Mac Typer 官网和在线打字练习站（Go + Docker），部署方法见 [web/README.md](web/README.md)。
+
 ## 安装
 
 从 [最新 Release](https://github.com/Ronin-TFT/mac-typer/releases/latest) 下载 `MacTyper.dmg`，打开后把 **Mac Typer** 拖入“应用程序”。

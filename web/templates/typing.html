@@ -1,0 +1,57 @@
+{{define "content"}}
+<section class="wrap typing">
+  <h1>在线打字练习</h1>
+  <p class="lead">选择语言和时长，开始输入就会计时。英文按 WPM（每分钟单词数，5 个字符计 1 词）计速，中文按 CPM（每分钟字数）计速。</p>
+
+  <div class="controls" role="group" aria-label="测试设置">
+    <label>语言
+      <select id="mode">
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+      </select>
+    </label>
+    <label>时长
+      <select id="limit">
+        <option value="30">30 秒</option>
+        <option value="60" selected>60 秒</option>
+        <option value="120">120 秒</option>
+      </select>
+    </label>
+    <button class="btn btn-ghost" id="restart" type="button">换一段 / 重新开始</button>
+  </div>
+
+  <div class="stats" aria-live="polite">
+    <div><span id="time">60</span><small>剩余秒数</small></div>
+    <div><span id="speed">0</span><small id="speed-unit">CPM</small></div>
+    <div><span id="acc">100</span><small>准确率 %</small></div>
+  </div>
+
+  <div id="passage" class="passage" aria-label="要输入的文本"></div>
+  <textarea id="input" class="input" rows="4" placeholder="在这里开始输入，计时会自动开始…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+
+  <div id="result" class="result" hidden>
+    <h2>测试结束</h2>
+    <p id="result-text"></p>
+    <form id="submit-form" class="submit">
+      <input id="name" maxlength="16" placeholder="昵称（1–16 字）" required>
+      <button class="btn" type="submit">提交到排行榜</button>
+    </form>
+    <p id="submit-msg" class="note"></p>
+  </div>
+
+  {{template "ad" .}}
+
+  <h2>排行榜 <small id="board-mode"></small></h2>
+  <table class="board">
+    <thead><tr><th>#</th><th>昵称</th><th>速度</th><th>准确率</th><th>时长</th></tr></thead>
+    <tbody id="board"><tr><td colspan="5">加载中…</td></tr></tbody>
+  </table>
+
+  <aside class="promo">
+    <h2>想让电脑替你打字？</h2>
+    <p>Mac Typer 能按设定的随机节奏自动输入文本，还会模拟打错和回删。</p>
+    <a class="btn" href="{{.DownloadURL}}" rel="noopener">免费下载 Mac Typer</a>
+  </aside>
+</section>
+{{end}}
+{{define "scripts"}}<script src="/static/typing.js" defer></script>{{end}}

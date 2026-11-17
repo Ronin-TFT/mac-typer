@@ -1,0 +1,41 @@
+{{define "layout"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<meta name="description" content="{{.Description}}">
+<link rel="canonical" href="{{.SiteURL}}{{.Path}}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{.Title}}">
+<meta property="og:description" content="{{.Description}}">
+<meta property="og:url" content="{{.SiteURL}}{{.Path}}">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+{{if .AdClient}}<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={{.AdClient}}" crossorigin="anonymous"></script>{{end}}
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/"><img src="/static/icon.svg" alt="" width="28" height="28">Mac Typer</a>
+    <nav>
+      <a href="/typing"{{if eq .Path "/typing"}} aria-current="page"{{end}}>打字练习</a>
+      <a href="{{.RepoURL}}" rel="noopener">GitHub</a>
+      <a class="btn btn-small" href="{{.DownloadURL}}" rel="noopener">下载</a>
+    </nav>
+  </div>
+</header>
+<main>{{template "content" .}}</main>
+<footer class="footer">
+  <div class="wrap">
+    <p>© {{.Year}} Mac Typer · <a href="/typing">在线打字练习</a> · <a href="{{.RepoURL}}" rel="noopener">开源仓库</a></p>
+  </div>
+</footer>
+{{block "scripts" .}}{{end}}
+</body>
+</html>{{end}}
+
+{{define "ad"}}{{if and .AdClient .AdSlot}}
+<div class="ad"><ins class="adsbygoogle" style="display:block" data-ad-client="{{.AdClient}}" data-ad-slot="{{.AdSlot}}" data-ad-format="auto" data-full-width-responsive="true"></ins>
+<script>(adsbygoogle = window.adsbygoogle || []).push({});</script></div>
+{{end}}{{end}}

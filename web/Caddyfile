@@ -1,0 +1,10 @@
+# Caddy automatically obtains and renews an HTTPS certificate for DOMAIN.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:8080
+}
+
+# Redirect www to the bare domain.
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
+}

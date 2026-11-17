@@ -1,0 +1,41 @@
+{{define "content"}}
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">macOS 原生应用 · v{{.AppVersion}}</p>
+    <h1>像真人一样打字的<br>macOS 模拟键入工具</h1>
+    <p class="lead">粘贴文本，按下快捷键，Mac Typer 会以随机节奏逐字输入，还能模拟打错再删除重输。Go 内核加原生 AppKit 界面，轻量又快。</p>
+    <div class="cta">
+      <a class="btn" href="{{.DownloadURL}}" rel="noopener">免费下载 .dmg</a>
+      <a class="btn btn-ghost" href="/typing">先试试在线打字测速 →</a>
+    </div>
+    <p class="note">需要 Apple Silicon（M1–M4）与 macOS 13 及以上</p>
+  </div>
+</section>
+
+<section class="wrap features">
+  <h2>功能</h2>
+  <div class="grid">
+    <article><h3>随机间隔与抖动</h3><p>设定基础间隔和抖动幅度，单位支持毫秒和秒，输入节奏更自然。</p></article>
+    <article><h3>错词模拟</h3><p>导入错词库，随机打错后整词删除或只删错误部分再重输。</p></article>
+    <article><h3>全局快捷键</h3><p>开始、暂停/继续、结束都可自定义，在任何应用里都能控制。</p></article>
+    <article><h3>暂停不丢位置</h3><p>在删除错词途中暂停，继续后从原位置完成，不会乱序。</p></article>
+    <article><h3>记住设置</h3><p>间隔、抖动、倒计时和错词库路径会自动保存。</p></article>
+    <article><h3>开源免费</h3><p>代码托管在 GitHub，欢迎 Star、提 Issue 或贡献代码。</p></article>
+  </div>
+</section>
+
+{{template "ad" .}}
+
+<section class="wrap faq">
+  <h2>常见问题</h2>
+  <details><summary>为什么打开时提示需要“辅助功能”权限？</summary><p>模拟键盘输入需要 macOS 的辅助功能权限。在“系统设置 → 隐私与安全性 → 辅助功能”中勾选 Mac Typer 即可。</p></details>
+  <details><summary>支持 Intel Mac 吗？</summary><p>当前发布包只支持 Apple Silicon，Intel 版本在计划中。</p></details>
+  <details><summary>怎么更新？</summary><p>下载新的 .dmg，把整个应用替换到“应用程序”文件夹即可。</p></details>
+</section>
+
+<section class="wrap promo">
+  <h2>测测你的打字速度</h2>
+  <p>中英文打字测速，实时显示 WPM、CPM 和准确率，还能上排行榜。</p>
+  <a class="btn" href="/typing">开始打字练习</a>
+</section>
+{{end}}
